@@ -23,20 +23,30 @@ class OUPESBinarySensorDescription(BinarySensorEntityDescription):
     """Extends BinarySensorEntityDescription with the BLE attr number."""
 
     attr: int = 0
+    bit_mask: int = 0  # if non-zero, check this specific bit of the attr value
 
 
 BINARY_SENSOR_DESCRIPTIONS: tuple[OUPESBinarySensorDescription, ...] = (
     OUPESBinarySensorDescription(
         key="ac_output",
         attr=1,
+        bit_mask=0x01,  # attr 1 is a bitmask: bit0=AC, bit1=DC(12V), bit2=USB
         name="AC Output",
         icon="mdi:power-socket",
     ),
     OUPESBinarySensorDescription(
         key="dc_output",
-        attr=2,
-        name="DC Output",
+        attr=1,
+        bit_mask=0x02,  # DC 12V cigarette lighter = bit 1 of attr 1
+        name="DC 12V Output",
         icon="mdi:car-electric",
+    ),
+    OUPESBinarySensorDescription(
+        key="usb_output",
+        attr=1,
+        bit_mask=0x04,  # USB (A + C combined) = bit 2 of attr 1
+        name="USB Output",
+        icon="mdi:usb",
     ),
     OUPESBinarySensorDescription(
         key="ac_input_connected",
@@ -94,7 +104,10 @@ class OUPESMegaBinarySensor(
         if self.coordinator.data is None:
             return None
         raw = self.coordinator.data["attrs"].get(self.entity_description.attr)
-        return bool(raw) if raw is not None else None
+        if raw is None:
+            return None
+        mask = self.entity_description.bit_mask
+        return bool(raw & mask) if mask else bool(raw)
 
 
 async def async_setup_entry(

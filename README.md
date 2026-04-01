@@ -79,8 +79,9 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | Battery | 3 | % | State of charge |
 | AC Output Power | 4 | W | Load on AC outlets |
 | AC Input Power | 5 | W | Grid/shore power draw |
-| DC Car Charger Input | 6 | W | 12 V car port input |
-| Solar Input | 7 | W | MPPT solar input |
+| DC 12V Output | 6 | W | 12 V cigarette lighter output |
+| USB-C Output | 7 | W | USB-C port output power |
+| USB-A Output | 8 | W | USB-A port output power |
 | Total Input Power | 21 | W | Grid + solar combined |
 | Grid Input Power | 22 | W | Grid only |
 | Remaining Runtime | 30 | min | At current discharge rate |
@@ -102,8 +103,9 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 
 | Entity | Attr | Notes |
 |--------|------|-------|
-| AC Output | 1 | AC outlets enabled |
-| DC Output | 2 | DC / car port enabled |
+| AC Output | 1 (bit 0) | AC outlets enabled |
+| DC 12V Output | 1 (bit 1) | 12 V cigarette lighter enabled |
+| USB Output | 1 (bit 2) | USB-A and USB-C ports enabled |
 | AC Input Connected | 23 | Grid power present |
 | AC Output Control | 84 | |
 

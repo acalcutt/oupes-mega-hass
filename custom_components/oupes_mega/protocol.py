@@ -46,9 +46,9 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     3:   ("Battery",                 "pct"),
     4:   ("AC Output Power",         "W"),
     5:   ("AC Input Power",          "W"),
-    6:   ("DC Car Charger Input",    "W"),
-    7:   ("Solar Input",             "W"),
-    8:   ("Unknown Input",           "raw"),
+    6:   ("DC 12V Output",          "W"),   # cigarette lighter / car charger port
+    7:   ("USB-C Output",            "W"),   # ⚠️ was "Solar Input" — confirmed USB-C output wattage
+    8:   ("USB-A Output",            "W"),   # ⚠️ was "Unknown Input"
     9:   ("Unknown",                 "raw"),
     21:  ("Total Input Power",       "W"),
     22:  ("Grid Input Power",        "W"),
@@ -81,10 +81,13 @@ BOOL_ATTRS = {attr for attr, (_, unit) in ATTR_MAP.items() if unit == "bool"}
 def parse_ble_packet(data: bytearray) -> dict[int, int]:
     """Parse a BLE notification packet into {attr: raw_value}.
 
-    Two formats observed in HCI capture:
-      Type 0x00 / 0x01  — standard TLV stream
-      Type 0x80 / 0x81  — handshake / secondary packets; try TLV from byte 2
-      Type 0x82          — end-of-group marker; skip
+    Formats observed in HCI capture:
+      Type 0x00 / 0x01  — standard TLV stream (tag 0x0a, length, attr, value…)
+      Type 0x81         — secondary data; uses same TLV but some firmware
+                          versions omit the 0x0a tag and send [length][attr][val]
+                          directly (compact form, length 1-4).
+      Type 0x80         — handshake-only, not a TLV payload; skip.
+      Type 0x82         — end-of-group marker; skip.
     """
     results: dict[int, int] = {}
     if len(data) < 3:
@@ -92,21 +95,27 @@ def parse_ble_packet(data: bytearray) -> dict[int, int]:
 
     pkt_type = data[1]
 
-    if pkt_type == 0x82:
-        return results  # end-of-group marker, body is all zeros
+    if pkt_type in (0x82, 0x80):
+        return results  # no TLV payload
 
-    # For 0x80/0x81, try TLV starting at byte 2
-    start = 2 if pkt_type in (0x80, 0x81) else 2
-
-    i = start
+    i = 2
     while i < len(data) - 1:  # last byte is checksum
         if data[i] == 0x0A and i + 2 < len(data):
+            # Standard form: [0x0a][length][attr][val…]
             length = data[i + 1]
             if length >= 1 and i + 2 + length <= len(data) - 1:
                 attr = data[i + 2]
                 val_bytes = data[i + 3: i + 2 + length]
                 results[attr] = int.from_bytes(val_bytes, "little") if val_bytes else 0
             i += 2 + length
+        elif pkt_type == 0x81 and 1 <= data[i] <= 4 and i + 1 + data[i] <= len(data) - 1:
+            # Compact form (0x81 only): [length][attr][val…]  — firmware omits 0x0a tag.
+            # Seen for ext-battery % (attr 79) when value fits in one byte.
+            length = data[i]
+            attr = data[i + 1]
+            val_bytes = data[i + 2: i + 1 + length]
+            results[attr] = int.from_bytes(val_bytes, "little") if val_bytes else 0
+            i += 1 + length
         else:
             i += 1
 

@@ -38,7 +38,7 @@ ATTR_MAP = {
     4:   ("AC Output Power",            "W"),
     5:   ("AC Input (Grid) Power",      "W"),
     6:   ("DC / Car Charger Input",     "W"),
-    7:   ("Solar Input (MPPT)",         "W"),
+    7:   ("DC/USB-C Output",            "W"),  # ⚠️ was "Solar Input (MPPT)" — confirmed DC/USB-C output wattage
     8:   ("Unknown Input",              "raw"),
     9:   ("Unknown",                    "raw"),
     21:  ("Total Input (Grid + Solar)",  "W"),
