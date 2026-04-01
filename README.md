@@ -13,7 +13,7 @@ Polls the device every minute over BLE and exposes ~20 Home Assistant entities
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES Mega 1 | Power on, BLE enabled (it always is when on) |
+| OUPES Mega 1 | Power on, BLE enabled — press the BLE/WiFi button on the unit to enable it; the setting persists after that |
 
 ### USB Bluetooth adapter for HA
 
@@ -153,7 +153,8 @@ Restart HA after changing.
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| Entities always Unavailable | Device out of range or off | Check device is on |
+| Entities always Unavailable | Device out of range or off | Check device is on and in range |
+| Entities always Unavailable | BLE disabled on unit | Press the BLE/WiFi button on the device to re-enable it |
 | "BLE device not found" in logs | HA hasn't scanned recently | Check Bluetooth integration is running |
 | "Cold-probe drop" repeated | BLE interference or device busy | Usually self-resolves on next poll |
 | Setup fails with ConfigEntryNotReady | Device not reachable at startup | HA will retry — power on the device |
