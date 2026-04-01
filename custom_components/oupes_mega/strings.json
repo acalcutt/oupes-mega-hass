@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "OUPES Mega Power Station",
+        "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.",
+        "data": {
+          "address": "Bluetooth MAC Address",
+          "name": "Device Name"
+        },
+        "data_description": {
+          "address": "Example: 8C:D0:B2:A7:EC:AF"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "OUPES Mega Power Station",
+        "description": "Found **{name}** ({address}) nearby. Add it to Home Assistant?"
+      }
+    },
+    "abort": {
+      "already_configured": "This device is already configured."
+    },
+    "error": {
+      "invalid_address": "Invalid Bluetooth MAC address format. Use XX:XX:XX:XX:XX:XX."
+    }
+  }
+}

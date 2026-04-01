@@ -1,0 +1,14 @@
+{
+  "domain": "oupes_mega",
+  "name": "OUPES Mega Power Station",
+  "version": "1.0.0",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "bluetooth": [
+    {"local_name": "TT"}
+  ],
+  "documentation": "",
+  "iot_class": "local_polling",
+  "requirements": []
+}
