@@ -130,6 +130,12 @@ If a poll fails entirely, entities **retain their last known values** for up to
 10 minutes before going unavailable. This prevents flickering from transient
 BLE issues.
 
+> **Note:** The device only supports **one BLE connection at a time.** While the
+> integration is actively polling (~15 s per minute), the Cleanergy app cannot
+> connect. Conversely, if you have the app open, the integration's poll that
+> minute will fail and fall back to cached values. Close the app when you don't
+> need it to let HA poll freely.
+
 ---
 
 ## Changing the Poll Interval
@@ -156,6 +162,7 @@ Restart HA after changing.
 | Entities always Unavailable | Device out of range or off | Check device is on and in range |
 | Entities always Unavailable | BLE disabled on unit | Press the BLE/WiFi button on the device to re-enable it |
 | "BLE device not found" in logs | HA hasn't scanned recently | Check Bluetooth integration is running |
+| Entities always Unavailable | App open on phone | The device only allows one BLE connection at a time — close the Cleanergy app and wait for the next poll |
 | "Cold-probe drop" repeated | BLE interference or device busy | Usually self-resolves on next poll |
 | Setup fails with ConfigEntryNotReady | Device not reachable at startup | HA will retry — power on the device |
 
