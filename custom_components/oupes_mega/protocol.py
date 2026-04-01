@@ -45,32 +45,41 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     2:   ("DC Output",               "bool"),
     3:   ("Battery",                 "pct"),
     4:   ("AC Output Power",         "W"),
-    5:   ("AC Input Power",          "W"),
+    5:   ("Unknown (attr 5)",       "raw"),  # ⚠️ mirrors AC output W in all conditions (incl. pure discharge); likely a second AC output measurement point
     6:   ("DC 12V Output",          "W"),   # cigarette lighter / car charger port
-    7:   ("USB-C Output",            "W"),   # ⚠️ was "Solar Input" — confirmed USB-C output wattage
-    8:   ("USB-A Output",            "W"),   # ⚠️ was "Unknown Input"
+    7:   ("USB-C Output",            "W"),   # confirmed USB-C port output wattage
+    8:   ("USB-A Output",            "W"),
     9:   ("Unknown",                 "raw"),
     21:  ("Total Input Power",       "W"),
     22:  ("Grid Input Power",        "W"),
-    23:  ("AC Input Connected",      "bool"),
-    30:  ("Remaining Runtime",       "min"),
+    23:  ("Solar Input Power",       "W"),   # confirmed: 0 with no solar, tracks app SOLAR reading exactly
+    30:  ("Remaining Runtime",       "min"),   # very inaccurate with no load or variable load (e.g. 5940 = 99h when outputs off/low)
     32:  ("Main Unit Temperature",    "F/10"),  # ⚠️ was labelled Battery Pack Voltage — rises under load, matches app temp display
-    51:  ("Charge Mode",             "chargemode"),
+                                                   # ⚠️ unit may actually be C/10 not F/10: raw values 949→970 correlate with
+                                                   # a thermal protection trip; 97°C makes sense, 97°F (36°C) does not
+    51:  ("Unknown (attr 51)",       "raw"),  # constant=2 in all sessions; attr 51=2 in both confirmed-Slow (br8) AND confirmed-Fast (br9) charging modes → NOT the charging mode indicator
     53:  ("Unknown (attr 53)",       "raw"),
     54:  ("Unknown (attr 54)",       "raw"),
     84:  ("AC Output Control",       "bool"),
-    105: ("Unknown Flag (attr 105)", "raw"),
+    105: ("AC Inverter Protection",    "bool"),  # 1 = inverter protection/thermal warning active:
+                                                   #   goes 1 ~60s after AC output is hardware-tripped (overcurrent/thermal)
+                                                   #   while 1 with AC off: device is in 8-10 min thermal recovery, fans may struggle
+                                                   #   also goes 1 during elevated-temp normal operation (thermal warning, no hard trip)
+                                                   # 0 = normal operating state; attr 32 temp rises 949→970 during protection events
 }
 
 # Attrs that arrive grouped by slot; attr 101 carries the slot index (1 or 2).
+# On the OUPES Mega 1 these reflect the device's two INTERNAL battery modules,
+# NOT external B2 expansion batteries.  Attrs 78+101 are in one packet type;
+# attrs 79+80 are in a separate packet type (never share a packet with 78/101):
+#   78 + 101: per-module remaining runtime (0→5940; 5940 = charging/idle max)
+#   79 + 80:  BMS cell-group scan index (0–14) + section voltage in 0.1 V
 EXT_BATTERY_ATTRS: set[int] = {78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
-    78: ("Remaining Runtime", "min"),
-    79: ("Battery",           "pct"),
-    80: ("Temperature",       "F/10"),
+    78: ("Remaining Runtime",  "min"),   # per-module; 5940 = charging/idle max
+    79: ("Cell Group Index",   "raw"),   # BMS scan index 0-14 (NOT battery %)
+    80: ("Section Voltage",    "V/10"),  # pack section voltage ×0.1 V (e.g. 861 = 86.1 V)
 }
-
-CHARGE_MODES = {2: "AC Charging"}
 
 # Convenience set of attrs that should become binary sensors
 BOOL_ATTRS = {attr for attr, (_, unit) in ATTR_MAP.items() if unit == "bool"}

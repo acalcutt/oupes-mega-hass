@@ -14,6 +14,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
+    UnitOfElectricPotential,
     UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
@@ -25,7 +26,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, STALE_TIMEOUT
 from .coordinator import OUPESMegaCoordinator
-from .protocol import CHARGE_MODES
+from .protocol import ATTR_MAP
 
 
 # ── Entity description ────────────────────────────────────────────────────────
@@ -57,14 +58,6 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         key="ac_output_power",
         attr=4,
         name="AC Output Power",
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfPower.WATT,
-    ),
-    OUPESSensorDescription(
-        key="ac_input_power",
-        attr=5,
-        name="AC Input Power",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -110,6 +103,14 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
     ),
     OUPESSensorDescription(
+        key="solar_input_power",
+        attr=23,
+        name="Solar Input Power",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+    ),
+    OUPESSensorDescription(
         key="remaining_runtime",
         attr=30,
         name="Remaining Runtime",
@@ -128,15 +129,16 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         value_fn=lambda v: round(v / 10, 1),
     ),
     OUPESSensorDescription(
-        key="charge_mode",
+        key="unknown_attr51",
         attr=51,
-        name="Charge Mode",
-        icon="mdi:battery-charging",
-        value_fn=lambda v: CHARGE_MODES.get(v, f"Unknown ({v})"),
+        name="Unknown (attr 51)",
+        icon="mdi:help-circle-outline",
     ),
 )
 
-# ── External battery sensors (slots 1–6, covering Mega 1/2/3 max) ───────────
+# ── Battery module sensors (slots 1–6, covering Mega 1/2/3 max) ─────────────
+# On Mega 1, slots 1 and 2 correspond to the two INTERNAL battery modules.
+# (Higher slots are used by external B2 expansion batteries on Mega 2/3.)
 # Slots with no data are automatically marked unavailable by the entity.
 
 MAX_EXT_BATTERY_SLOTS = 6  # Mega 3: up to 6 × B2 batteries
@@ -151,16 +153,15 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     key=f"ext_battery_{slot}_pct",
                     attr=79,
                     slot=slot,
-                    name=f"Ext Battery {slot} Charge",
-                    device_class=SensorDeviceClass.BATTERY,
+                    name=f"Battery Module {slot} Cell Group Index",
                     state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=PERCENTAGE,
+                    icon="mdi:battery-unknown",
                 ),
                 OUPESSensorDescription(
                     key=f"ext_battery_{slot}_runtime",
                     attr=78,
                     slot=slot,
-                    name=f"Ext Battery {slot} Runtime",
+                    name=f"Battery Module {slot} Runtime",
                     device_class=SensorDeviceClass.DURATION,
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -170,10 +171,10 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     key=f"ext_battery_{slot}_temp",
                     attr=80,
                     slot=slot,
-                    name=f"Ext Battery {slot} Temperature",
-                    device_class=SensorDeviceClass.TEMPERATURE,
+                    name=f"Battery Module {slot} Section Voltage",
+                    device_class=SensorDeviceClass.VOLTAGE,
                     state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+                    native_unit_of_measurement=UnitOfElectricPotential.VOLT,
                     value_fn=lambda v: round(v / 10, 1),
                 ),
             ]

@@ -46,11 +46,14 @@ ATTR_MAP = {
     23:  ("AC Input Connected",         "bool"),
     30:  ("Remaining Runtime",          "min"),
     32:  ("Main Unit Temperature",       "F/10"),  # ⚠️ was Battery Pack Voltage — rises under load, matches app temp display
-    51:  ("Charge Mode",                "chargemode"),
+                                                       # ⚠️ unit may be C/10 not F/10: 949→970 correlates with thermal trip; 97°C fits, 36°C does not
+    51:  ("Unknown (attr 51)",       "chargemode"),  # constant=2; NOT charging mode (confirmed same in both Slow+Fast charging sessions)
     53:  ("Unknown (attr 53)",          "raw"),
     54:  ("Unknown (attr 54)",          "raw"),
     84:  ("AC Output Control",          "bool"),
-    105: ("Unknown Flag (attr 105)",      "raw"),
+    105: ("AC Inverter Protection",    "bool"),  # 1 = inverter protection/thermal warning (~60s delayed after hardware trip)
+                                                   #   AC output suppressed for 8-10 min recovery; fans may struggle; also 1 at elevated temp during run
+                                                   # 0 = normal; attr 32 rises 949→970 correlated with thermal events
 }
 
 # Attrs that belong to a specific external battery slot.

@@ -49,16 +49,16 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[OUPESBinarySensorDescription, ...] = (
         icon="mdi:usb",
     ),
     OUPESBinarySensorDescription(
-        key="ac_input_connected",
-        attr=23,
-        name="AC Input Connected",
-        icon="mdi:transmission-tower",
-    ),
-    OUPESBinarySensorDescription(
         key="ac_output_control",
         attr=84,
         name="AC Output Control",
         icon="mdi:toggle-switch",
+    ),
+    OUPESBinarySensorDescription(
+        key="unknown_flag_105",
+        attr=105,
+        name="AC Inverter Protection",
+        icon="mdi:shield-alert",
     ),
 )
 

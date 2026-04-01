@@ -78,15 +78,15 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 |--------|------|------|-------|
 | Battery | 3 | % | State of charge |
 | AC Output Power | 4 | W | Load on AC outlets |
-| AC Input Power | 5 | W | Grid/shore power draw |
 | DC 12V Output | 6 | W | 12 V cigarette lighter output |
 | USB-C Output | 7 | W | USB-C port output power |
 | USB-A Output | 8 | W | USB-A port output power |
 | Total Input Power | 21 | W | Grid + solar combined |
 | Grid Input Power | 22 | W | Grid only |
+| Solar Input Power | 23 | W | MPPT solar input |
 | Remaining Runtime | 30 | min | At current discharge rate |
 | Main Unit Temperature | 32 | °F | Internal temperature of the unit |
-| Charge Mode | 51 | — | "AC Charging" etc. |
+| Charging Mode Setting | 51 | — | 1=Fast Charging, 2=Slow Charging; matches app Settings → Charging Mode |
 | Ext Battery 1–6 Charge | 79 | % | Per connected B2 battery |
 | Ext Battery 1–6 Runtime | 78 | min | |
 | Ext Battery 1–6 Temperature | 80 | °F | |
@@ -106,7 +106,6 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | AC Output | 1 (bit 0) | AC outlets enabled |
 | DC 12V Output | 1 (bit 1) | 12 V cigarette lighter enabled |
 | USB Output | 1 (bit 2) | USB-A and USB-C ports enabled |
-| AC Input Connected | 23 | Grid power present |
 | AC Output Control | 84 | |
 
 ---
