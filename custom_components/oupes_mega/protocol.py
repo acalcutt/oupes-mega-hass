@@ -84,6 +84,44 @@ EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
 # Convenience set of attrs that should become binary sensors
 BOOL_ATTRS = {attr for attr, (_, unit) in ATTR_MAP.items() if unit == "bool"}
 
+# ── Output bitmask bits (attr 1) ──────────────────────────────────────────────
+# Bit positions in the attr-1 bitmask sent by the device and written to control
+# each output independently.  Confirmed by correlating HCI write commands with
+# matching attr-1 notification values in the btsnoop captures.
+OUTPUT_AC_BIT    = 0x01   # bit 0 — AC inverter output
+OUTPUT_DC12V_BIT = 0x02   # bit 1 — DC 12 V cigarette-lighter output
+OUTPUT_USB_BIT   = 0x04   # bit 2 — USB-A / USB-C combined output
+
+
+def _crc8(data: bytes) -> int:
+    """CRC-8 (SMBUS) over `data` using polynomial 0x07, init 0x00."""
+    crc = 0
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
+def build_output_command(bitmask: int) -> bytes:
+    """Build a 20-byte BLE write command that sets the output-enable bitmask.
+
+    Args:
+        bitmask: new value for attr 1 (OR the OUTPUT_*_BIT constants you want ON).
+
+    Returns:
+        20-byte packet ready to be written to WRITE_CHAR_UUID.
+    """
+    pkt = bytearray(20)
+    pkt[0] = 0x01
+    pkt[1] = 0x80
+    pkt[2] = 0x03
+    pkt[3] = 0x02
+    pkt[4] = 0x01       # attr number
+    pkt[5] = bitmask & 0xFF
+    pkt[19] = _crc8(bytes(pkt[:19]))
+    return bytes(pkt)
+
 
 # ── Packet parser ─────────────────────────────────────────────────────────────
 

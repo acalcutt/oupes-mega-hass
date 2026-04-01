@@ -29,6 +29,7 @@ from .protocol import (
     NOTIFY_CHAR_UUID,
     WRITE_CHAR_UUID,
     parse_ble_packet,
+    build_output_command,  # noqa: F401 – re-exported for switch.py
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         self.address = address
         self.device_name = name
         self.last_successful_poll: datetime | None = None
+        self._pending_command: bytes | None = None
 
     # ── Public coordinator interface ──────────────────────────────────────────
 
@@ -117,6 +119,14 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             f"Device {self.address} failed to provide data after "
             f"{MAX_ATTEMPTS} attempts"
         )
+
+    def queue_command(self, command: bytes) -> None:
+        """Schedule a write command to be sent on the next BLE connection.
+
+        Call async_request_refresh() immediately after to ensure the command
+        is dispatched without waiting for the normal polling interval.
+        """
+        self._pending_command = command
 
     # ── Internal BLE connection logic ─────────────────────────────────────────
 
@@ -191,6 +201,21 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     except BleakError as exc:
                         _LOGGER.warning(
                             "Init packet %d error on %s: %s", i, self.address, exc
+                        )
+
+                # ── Step 3b: send any queued command ─────────────────────────
+                if self._pending_command is not None:
+                    cmd = self._pending_command
+                    self._pending_command = None
+                    try:
+                        await client.write_gatt_char(
+                            WRITE_CHAR_UUID, cmd, response=False
+                        )
+                        await asyncio.sleep(0.1)
+                    except BleakError as exc:
+                        _LOGGER.warning(
+                            "Failed to send queued command to %s: %s",
+                            self.address, exc,
                         )
 
                 # ── Step 4: keepalive loop + collect notifications ────────────
