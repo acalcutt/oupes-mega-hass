@@ -13,7 +13,7 @@ Polls the device every 5 minutes over BLE and exposes ~20 Home Assistant entitie
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES Mega 1 | Power on, BLE enabled (it always is when on) |
+| OUPES Mega 1 | Power on, BLE enabled |
 
 ### USB Bluetooth adapter for HA
 
