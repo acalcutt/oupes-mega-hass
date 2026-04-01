@@ -1,8 +1,8 @@
 # OUPES Mega — Home Assistant Custom Integration
 
 A local Bluetooth (BLE) integration for the **OUPES Mega 1** power station.
-Polls the device every minute over BLE and exposes ~20 Home Assistant entities
-(sensors + binary sensors) with no cloud dependency.
+Polls the device every minute over BLE and exposes sensors, binary sensors, and
+toggle switches with no cloud dependency.
 
 ---
 
@@ -84,20 +84,18 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | Total Input Power | 21 | W | Grid + solar combined |
 | Grid Input Power | 22 | W | Grid only |
 | Solar Input Power | 23 | W | MPPT solar input |
-| Remaining Runtime | 30 | min | At current discharge rate |
-| Main Unit Temperature | 32 | °F | Internal temperature of the unit |
-| Charging Mode Setting | 51 | — | 1=Fast Charging, 2=Slow Charging; matches app Settings → Charging Mode |
-| Ext Battery 1–6 Charge | 79 | % | Per connected B2 battery |
-| Ext Battery 1–6 Runtime | 78 | min | |
-| Ext Battery 1–6 Temperature | 80 | °F | |
+| Remaining Runtime | 30 | min | At current discharge rate (inaccurate under variable load) |
+| Main Unit Temperature | 32 | °F | Internal temperature (÷10; e.g. raw 963 → 96.3 °F) |
+| Battery Module 1–2 Runtime | 78 | min | Per internal battery module; 5940 = charging/idle max |
+| Battery Module 1–2 Cell Group Index | 79 | — | BMS cell-group scan counter (0–14) |
+| Battery Module 1–2 Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
+| Unknown (attr 51) | 51 | — | Constant 2 in all captures; meaning unconfirmed |
 
-> Entities for all 6 slots are registered at setup. Slots with no connected
-> battery show as **Unavailable** and become available automatically when
-> a battery is detected. (Mega 1: up to 2 slots, Mega 2: up to 4, Mega 3: up to 6.)
->
-> All entities retain their last known value for up to 10 minutes if a poll
-> fails (e.g. transient BLE drop). They only go unavailable if the device
-> has been unreachable for longer than that.
+> The Mega 1 has two internal battery modules (slots 1 and 2). Slots with no
+> data are automatically marked **Unavailable** and become active when data
+> arrives. All entities retain their last known value for up to 10 minutes if
+> a poll fails. They only go unavailable if the device has been unreachable
+> for longer than that.
 
 ### Binary Sensors (on/off)
 
@@ -107,6 +105,20 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | DC 12V Output | 1 (bit 1) | 12 V cigarette lighter enabled |
 | USB Output | 1 (bit 2) | USB-A and USB-C ports enabled |
 | AC Output Control | 84 | |
+| AC Inverter Protection | 105 | On when the inverter is in thermal protection / recovery mode |
+
+### Switches (toggleable)
+
+| Entity | Notes |
+|--------|-------|
+| AC Output | Turns the AC inverter output on or off |
+| DC 12V Output | Turns the 12 V cigarette-lighter port on or off |
+| USB Output | Turns the combined USB-A / USB-C output on or off |
+
+Toggling a switch writes the updated output-enable bitmask to the device over
+BLE. The UI updates immediately (optimistic); the device's confirmed response
+is reflected on the next poll (~1 minute) or sooner if the coordinator refresh
+triggers quickly.
 
 ---
 

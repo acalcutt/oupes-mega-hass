@@ -171,10 +171,10 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     key=f"ext_battery_{slot}_temp",
                     attr=80,
                     slot=slot,
-                    name=f"Battery Module {slot} Section Voltage",
-                    device_class=SensorDeviceClass.VOLTAGE,
+                    name=f"Battery Module {slot} Temperature",
+                    device_class=SensorDeviceClass.TEMPERATURE,
                     state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
                     value_fn=lambda v: round(v / 10, 1),
                 ),
             ]

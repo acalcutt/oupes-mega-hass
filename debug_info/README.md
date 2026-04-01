@@ -22,6 +22,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
 - [Bluetooth LE (BLE)](#bluetooth-le-ble)
   - [GATT Profile](#gatt-profile)
   - [Packet Format](#packet-format)
+  - [BLE Output Control](#ble-output-control)
   - [Working Python Example](#ble-python-example)
 - [Telemetry Attribute Map](#telemetry-attribute-map)
 - [Notes & Unknowns](#notes--unknowns)
@@ -300,8 +301,8 @@ while True:
                 print(f"Battery: {data.get('3','?')}% | "
                       f"AC In: {data.get('5','?')}W | "
                       f"AC Out: {data.get('4','?')}W | "
-                      f"Temp: {int(data.get('80', 0)) / 10:.1f} | "
-                      f"Batt V: {int(data.get('32', 0)) / 100:.2f}V")
+                      f"Temp: {int(data.get('32', 0)) / 10:.1f}°C | "
+                      f"Solar: {data.get('23','?')}W")
             time.sleep(30)
     except (ConnectionResetError, BrokenPipeError, OSError) as e:
         print(f"Disconnected ({e}), reconnecting in 10s...")
@@ -456,6 +457,65 @@ The attr numbers in BLE packets are **identical** to the attr numbers used in th
 
 ---
 
+### BLE Output Control
+
+The three output ports (AC, DC 12V, USB) are controlled by writing a single bitmask to attr 1 via the write characteristic. Confirmed by correlating HCI write commands from btsnoop captures with matching attr-1 notification values.
+
+**Write command format (20 bytes):**
+```
+01 80 03 02 01 [BITMASK] 00 00 00 00 00 00 00 00 00 00 00 00 00 [CRC8]
+```
+
+| Byte | Role |
+|------|------|
+| `0x01` | Packet start |
+| `0x80 0x03 0x02 0x01` | Command header (write attr 1) |
+| `[BITMASK]` | New output state: OR of desired `OUTPUT_*_BIT` constants |
+| `0x00 × 13` | Padding |
+| `[CRC8]` | CRC-8/SMBUS over bytes 0–18 (poly=0x07, init=0x00) |
+
+**Bitmask constants:**
+```python
+OUTPUT_AC_BIT    = 0x01   # bit 0 — AC inverter output
+OUTPUT_DC12V_BIT = 0x02   # bit 1 — DC 12V cigarette-lighter output
+OUTPUT_USB_BIT   = 0x04   # bit 2 — USB-A / USB-C combined output
+```
+
+**Confirmed captured writes:**
+```
+01800302 01 00 00...00 1e   # bitmask 0x00 = all off
+01800302 01 01 00...00 fb   # bitmask 0x01 = AC only
+01800302 01 04 00...00 83   # bitmask 0x04 = USB only
+01800302 01 05 00...00 66   # bitmask 0x05 = AC + USB
+01800302 01 07 00...00 ab   # bitmask 0x07 = AC + DC12V + USB (all on)
+```
+
+**Python helper:**
+```python
+def _crc8(data: bytes) -> int:
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+def build_output_command(bitmask: int) -> bytes:
+    pkt = bytearray(20)
+    pkt[0], pkt[1], pkt[2], pkt[3], pkt[4] = 0x01, 0x80, 0x03, 0x02, 0x01
+    pkt[5] = bitmask & 0xFF
+    pkt[19] = _crc8(bytes(pkt[:19]))
+    return bytes(pkt)
+
+# Examples:
+build_output_command(OUTPUT_AC_BIT | OUTPUT_USB_BIT)  # turn on AC + USB, leave DC12V off
+build_output_command(0)                               # all off
+```
+
+Write the result to `WRITE_CHAR_UUID` (`00002b11`) with `response=False`. To toggle one output without affecting the others, read the current attr-1 bitmask from the latest telemetry, set or clear the relevant bit, then send the new full bitmask.
+
+---
+
 ### BLE Python Example
 
 Requires the `bleak` library: `pip install bleak`
@@ -545,31 +605,31 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 
 | Attr | Dec | Meaning | Unit / Scaling | Confidence |
 |------|-----|---------|----------------|------------|
-| `0x01` | 1 | AC output enabled | `1` = on, `0` = off | ✅ |
-| `0x02` | 2 | DC output enabled | `1` = on, `0` = off | ✅ |
+| `0x01` | 1 | **Output enable bitmask** | bit0=`0x01`=AC, bit1=`0x02`=DC 12V, bit2=`0x04`=USB — value is OR of currently-enabled bits | ✅ Confirmed via BLE write captures (see [BLE Output Control](#ble-output-control)) |
+| `0x02` | 2 | Unknown (possibly legacy output flag) | — | ❓ Superseded by attr 1 bitmask; original "DC output enabled" assumption unconfirmed |
 | `0x03` | 3 | Battery percentage | `0`–`100` | ✅ App shows 100% |
 | `0x04` | 4 | AC output power | Watts | ✅ App shows 494–502W |
-| `0x05` | 5 | AC input (grid) power | Watts | ✅ App shows ~490–510W |
-| `0x06` | 6 | DC / car charger input | Watts | ⚠️ Always 0 in captures |
-| `0x07` | 7 | Solar input power (MPPT) | Watts | ⚠️ App shows 1W; was 0 at capture time |
-| `0x08` | 8 | Unknown input | — | ❓ |
+| `0x05` | 5 | Unknown (mirrors AC output power) | Watts — identical to attr 4 in all capture conditions including pure discharge | ⚠️ Possibly a second AC output measurement point |
+| `0x06` | 6 | DC 12V Output power (cigarette-lighter port) | Watts | ✅ Output port, not input |
+| `0x07` | 7 | USB-C Output power | Watts | ✅ |
+| `0x08` | 8 | USB-A Output power | Watts | ✅ |
 | `0x09` | 9 | Unknown | — | ❓ |
-| `0x15` | 21 | Total charging input (grid + solar) | Watts, 1:1 raw | ⚠️ Always 1W higher than attr 22 — consistent with solar reading ~1W noise when unplugged |
-| `0x16` | 22 | Grid input (wall charge) | Watts, 1:1 raw (e.g. 29 → 29W) | ⚠️ Previously matched app "Grid 30W"; may be grid-only portion |
-| `0x17` | 23 | AC input connected | `1` = yes, `0` = no | ✅ |
-| `0x1E` | 30 | Remaining runtime | **Minutes** (e.g. 5940 = 4d 3h) | ✅ Confirmed vs app display |
-| `0x20` | 32 | Battery pack voltage | ÷10 → Volts (e.g. 909 → 90.9V) | ✅ Full pack voltage confirmed live |
-| `0x33` | 51 | Charge mode / state | `2` = AC charging | ⚠️ |
+| `0x15` | 21 | Total Input Power (grid + solar) | Watts | ✅ Consistently 1W higher than attr 22 — accounts for solar MPPT noise floor |
+| `0x16` | 22 | Grid Input Power (wall charge) | Watts, 1:1 raw | ✅ Confirmed vs app "Grid" display |
+| `0x17` | 23 | Solar Input Power (MPPT) | Watts — `0` with no panel connected | ✅ Tracks app SOLAR reading exactly |
+| `0x1E` | 30 | Remaining Runtime (main unit) | **Minutes** (inaccurate under variable load; e.g. 5940 ≈ 99h shown when outputs off) | ✅ |
+| `0x20` | 32 | **Main Unit Temperature** | ÷10 = °F (e.g. raw 963 → 96.3 °F at idle) | ✅ Confirmed — raw ~960 at idle matches app temperature display |
+| `0x33` | 51 | Unknown (constant=2 in all captures) | — | ❓ Not a charging mode indicator |
 | `0x35` | 53 | Unknown | — | ❓ |
 | `0x36` | 54 | Unknown | — | ❓ |
-| `0x4E` | 78 | External battery remaining runtime | **Minutes** (e.g. 27499 = 19d 2h) | ✅ Confirmed vs app "Backup battery 2" |
-| `0x4F` | 79 | Battery percentage (duplicate of attr 3) | `0`–`100` | ✅ |
-| `0x50` | 80 | External battery temperature | ÷10 = °F (e.g. 878 → 87.8°F) | ✅ Confirmed vs app "Backup battery" temps |
+| `0x4E` | 78 | Per-module Remaining Runtime (slot-indexed by attr 101) | **Minutes** (5940 = charging/idle max) | ✅ Two internal battery modules — NOT an external expansion battery |
+| `0x4F` | 79 | **Cell Group Index** (BMS cell-group scan counter) | `0`–`14` — cycles through cell groups; **not** battery % | ✅ Corrected — original "battery % duplicate" assumption was wrong |
+| `0x50` | 80 | **Battery Module Temperature** (slot-indexed by attr 101) | ÷10 = °F (e.g. 878 → 87.8 °F) | ✅ Confirmed vs app temperature display |
 | `0x54` | 84 | AC output control (write only) | `1` = on, `0` = off | ⚠️ Observed in app control capture |
-| `0x65` | 101 | Data group index | `1` or `2` — alternates between broadcast groups; not a charging source flag | ⚠️ |
-| `0x69` | 105 | Unknown flag | — | ❓ |
+| `0x65` | 101 | Battery module slot index | `1` or `2` — identifies which internal module attrs 78/79/80 belong to in a given packet | ✅ |
+| `0x69` | 105 | **AC Inverter Protection** (thermal/overcurrent flag) | `1` = protection active (~60s after hard trip, or during elevated-temp warning); `0` = normal | ✅ Goes `1` during 8–10 min thermal recovery; confirmed via btsnoop timestamps |
 
-> **Note:** The main unit temperature (91°F in app) and main unit remaining runtime (13d 11h) have not yet been mapped to attr numbers. They likely exist in attr groups not yet polled (e.g. attrs 10–20, 40–50, or 60–70). Expand the `ATTR_GROUPS` poll list to discover them.
+> **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes). Attr 79 is BMS cell-group scan index (not battery %); attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
 
 ---
 
@@ -579,18 +639,19 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 
 | App Display | Value at Capture | Confirmed Attr |
 |-------------|-----------------|----------------|
-| Battery % | 100% | attr 3 / attr 79 ✅ |
-| Temperature (main unit) | 91°F | **Not yet mapped** |
-| Remaining time (main unit) | 13d 11h | **Not yet mapped** |
+| Battery % | 100% | attr 3 ✅ |
+| Temperature (main unit) | ~96 °F at idle | attr 32 ÷10 ✅ |
+| Remaining time (main unit) | Minutes (5940 shown when outputs off/low) | attr 30 ✅ |
 | AC output watts | 494–502W | attr 4 ✅ |
-| DC output watts | 0W | attr 2 (on/off) + unknown watts attr |
-| Grid input | 30W | attr 21 (raw = watts) ✅ |
-| Solar input | 1W | attr 22 (raw = watts) ⚠️ |
-| Backup battery 1 temp | 88°F | attr 80 ÷10 ✅ |
-| Backup battery 2 temp | 87°F | attr 80 ÷10 ✅ |
-| Backup battery 1 remaining | 4d 3h = 5940 min | attr 30 ✅ |
-| Backup battery 2 remaining | 19d 2h ≈ 27480 min | attr 78 ✅ |
-| Backup battery % | 100% | attr 79 ✅ |
+| DC 12V output watts | Watts | attr 6 ✅ |
+| USB-C output watts | Watts | attr 7 ✅ |
+| USB-A output watts | Watts | attr 8 ✅ |
+| Grid input | 30W | attr 22 ✅ |
+| Solar input | Watts (0 with no panel) | attr 23 ✅ |
+| AC + Solar total input | Watts | attr 21 ✅ |
+| Internal module runtime (slot 1 or 2) | Minutes (5940 = charging/idle max) | attr 78 + slot from attr 101 ✅ |
+| Internal module temperature | ÷10 °F (e.g. 878 → 87.8 °F) | attr 80 + slot from attr 101 ✅ |
+| AC inverter protection active | boolean | attr 105 ✅ |
 
 > The app also shows "Grid" and "Solar" as separate input sources on the flow diagram screen, suggesting there may be distinct attrs for each not yet fully identified.
 
@@ -598,9 +659,12 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 
 ## Notes & Unknowns
 
-- **Attr 30 confirmed = remaining runtime in minutes.** Cross-referenced against app display: raw `5940` = 4d 3h, raw `27499` ≈ 19d 2h. Values fluctuate because they reflect real-time calculation based on current load.
-- **Attr 78 confirmed = external battery remaining runtime in minutes**, matching the "Backup battery 2" display in the app.
-- **Attr 80 confirmed = external battery temperature ÷10 in °F.** The main unit temperature (91°F in app) has not been mapped yet — it likely resides in an attr group not yet polled. Attempts to poll unknown attr ranges (10–20, 40–50, 60–70, 90–100) returned no data, suggesting the device silently ignores unrecognized attrs.
+- **Attr 30 = main unit remaining runtime in minutes.** Values are inaccurate under variable load (e.g. 5940 shown when outputs are off/low). Fluctuates because it reflects real-time load calculation.
+- **Attr 32 = main unit temperature ÷10 in °F.** Confirmed: raw ~960 at idle = ~96 °F, consistent with app display. The earlier "probably °C" hypothesis was wrong — 96 °F is a perfectly reasonable idle temperature for the inverter internals.
+- **Attr 78 = per-module remaining runtime (internal battery modules), slot-indexed by attr 101.** The OUPES Mega 1 has two internal battery modules (slots 1 and 2) — these are NOT external B2 expansion batteries. Max value 5940 = charging/idle state.
+- **Attr 79 = Cell Group Index (BMS scan counter), NOT battery %.** Cycles 0–14 as the BMS scans each cell group. Original "battery % duplicate" assumption was incorrect.
+- **Attr 80 = Battery module temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
+- **Attr 105 = AC Inverter Protection flag.** Goes `1` approximately 60 seconds after the AC output is hardware-tripped (overcurrent or thermal) and remains `1` during the 8–10 minute thermal recovery window. Also activates during elevated-temperature normal operation as a thermal warning without a hard trip. Goes `0` once the device recovers.
 - **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input, with the MPPT solar input always reporting ~1W of noise even with no panel connected. The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading.
 - **Cloud connection is BLE-dependent.** The device only connects to the cloud broker while a phone is actively BLE-paired via the Cleanergy app. With no BLE connection, all publish requests return `num=0`. This was confirmed by the official app experiencing the same failure simultaneously. **This makes the WiFi/cloud path unsuitable for unattended Home Assistant integration.**
 - **Broker token appears long-lived.** The same token was observed across multiple separate capture sessions. It does not appear to be a short-lived session token.
@@ -614,6 +678,6 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 - **BLE init token = `device_key`.** Bytes 4–13 of init packet 7 (index 6) contain the `device_key` as a 10-character ASCII hex string. This is identical to the `device_key` used in the WiFi cloud protocol and is stable across all sessions.
 - **Cold-probe drops are normal.** The first BLE connection attempt often drops in ~300 ms with HCI disconnect reason `0x3e` before any ATT data is exchanged. The Cleanergy app silently retries — the subsequent connection proceeds normally.
 - **BLE packet type `0x80`:** The handshake ACK (`0180 0101 00 423054cc3f...`) does not follow TLV format. The device always sends exactly 3 of these in response to the init sequence. `0x81` packets that follow normal data groups **do** carry standard TLV data and decode identically to `0x01` continuation packets.
-- **Attr 32 = full pack voltage ÷10.** Raw `909` → 90.9 V at 100% SoC. This is the full series-stack voltage of a high-voltage LiFePO4 pack. The earlier ÷100 assumption was wrong.
-- **Attr 101 is a data group index**, not a charging source. It alternates between `1` and `2` across successive broadcast cycles, labelling which of two interleaved data groups a set of packets belongs to.
-- **Unpolled attr ranges:** The device silently ignores attrs it doesn't recognise. The main unit temperature and remaining runtime fields visible in the app have not been mapped — they may only be accessible via BLE or may require a different polling approach.
+- **Attr 1 is a bitmask for all three outputs**, not a simple AC on/off flag. bit0=`0x01`=AC, bit1=`0x02`=DC 12V, bit2=`0x04`=USB. Write the full bitmask (OR of desired bits) to control outputs independently — see [BLE Output Control](#ble-output-control).
+- **Attr 101 is the battery module slot index** (`1` or `2`), identifying which internal battery module the accompanying attrs 78/79/80 data belongs to in a given packet. Not a charging source flag.
+- **Unpolled attr ranges:** The device silently ignores attrs it doesn't recognise. Main unit temperature (attr 32) and remaining runtime (attr 30) are now confirmed. Attr 2 is unclear — may be a legacy flag superseded by the attr 1 bitmask.

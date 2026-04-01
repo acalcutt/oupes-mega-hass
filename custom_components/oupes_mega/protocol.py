@@ -54,9 +54,9 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     22:  ("Grid Input Power",        "W"),
     23:  ("Solar Input Power",       "W"),   # confirmed: 0 with no solar, tracks app SOLAR reading exactly
     30:  ("Remaining Runtime",       "min"),   # very inaccurate with no load or variable load (e.g. 5940 = 99h when outputs off/low)
-    32:  ("Main Unit Temperature",    "F/10"),  # ⚠️ was labelled Battery Pack Voltage — rises under load, matches app temp display
-                                                   # ⚠️ unit may actually be C/10 not F/10: raw values 949→970 correlate with
-                                                   # a thermal protection trip; 97°C makes sense, 97°F (36°C) does not
+    32:  ("Main Unit Temperature",    "F/10"),  # ÷10 = temperature in °F — confirmed always °F regardless of app unit setting
+                                                   # (btsnoop across F→C→F app switch showed smooth cooling trend, never
+                                                   # dropped to ~357 range; firmware always sends in °F)
     51:  ("Unknown (attr 51)",       "raw"),  # constant=2 in all sessions; attr 51=2 in both confirmed-Slow (br8) AND confirmed-Fast (br9) charging modes → NOT the charging mode indicator
     53:  ("Unknown (attr 53)",       "raw"),
     54:  ("Unknown (attr 54)",       "raw"),
@@ -73,12 +73,12 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
 # NOT external B2 expansion batteries.  Attrs 78+101 are in one packet type;
 # attrs 79+80 are in a separate packet type (never share a packet with 78/101):
 #   78 + 101: per-module remaining runtime (0→5940; 5940 = charging/idle max)
-#   79 + 80:  BMS cell-group scan index (0–14) + section voltage in 0.1 V
+#   79 + 80:  BMS cell-group scan index (0–14) + battery temperature in 0.1 °F
 EXT_BATTERY_ATTRS: set[int] = {78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
     78: ("Remaining Runtime",  "min"),   # per-module; 5940 = charging/idle max
     79: ("Cell Group Index",   "raw"),   # BMS scan index 0-14 (NOT battery %)
-    80: ("Section Voltage",    "V/10"),  # pack section voltage ×0.1 V (e.g. 861 = 86.1 V)
+    80: ("Temperature",        "F/10"),  # battery module temperature ×0.1 °F (e.g. 878 → 87.8 °F) — confirmed vs app display
 }
 
 # Convenience set of attrs that should become binary sensors
