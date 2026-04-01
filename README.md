@@ -144,7 +144,7 @@ Edit `const.py` in the integration folder and change `UPDATE_INTERVAL` and/or
 `STALE_TIMEOUT`:
 
 ```python
-UPDATE_INTERVAL = timedelta(minutes=1)    # default — how often to poll
+UPDATE_INTERVAL = timedelta(seconds=30)   # default — how often to poll
 UPDATE_INTERVAL = timedelta(minutes=5)    # less frequent
 
 STALE_TIMEOUT = timedelta(minutes=10)     # default — grace period before unavailable

@@ -8,7 +8,7 @@ CONF_ADDRESS = "address"
 CONF_NAME = "name"
 
 # How often to reconnect and pull a fresh telemetry snapshot
-UPDATE_INTERVAL = timedelta(minutes=1)
+UPDATE_INTERVAL = timedelta(seconds=30)
 
 # How long to keep showing the last known values after a failed poll before
 # marking entities as unavailable. Covers transient BLE connection failures
