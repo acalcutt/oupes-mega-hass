@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
@@ -13,7 +14,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, STALE_TIMEOUT
 from .coordinator import OUPESMegaCoordinator
 
 
@@ -75,6 +76,18 @@ class OUPESMegaBinarySensor(
             manufacturer="OUPES",
             model="Mega 1",
         )
+
+    @property
+    def available(self) -> bool:
+        """Stay available for STALE_TIMEOUT after the last successful poll.
+
+        Prevents flickering during transient BLE failures while still correctly
+        marking unavailable if the device has been off long-term.
+        """
+        last = self.coordinator.last_successful_poll
+        if last is None:
+            return False
+        return datetime.now() - last <= STALE_TIMEOUT
 
     @property
     def is_on(self) -> bool | None:

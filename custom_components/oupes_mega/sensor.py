@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable
 
 from homeassistant.components.sensor import (
@@ -13,7 +14,6 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
-    UnitOfElectricPotential,
     UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
@@ -23,7 +23,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, STALE_TIMEOUT
 from .coordinator import OUPESMegaCoordinator
 from .protocol import CHARGE_MODES
 
@@ -111,12 +111,12 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         icon="mdi:timer-outline",
     ),
     OUPESSensorDescription(
-        key="battery_voltage",
+        key="main_unit_temp",
         attr=32,
-        name="Battery Pack Voltage",
-        device_class=SensorDeviceClass.VOLTAGE,
+        name="Main Unit Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
         value_fn=lambda v: round(v / 10, 1),
     ),
     OUPESSensorDescription(
@@ -204,9 +204,17 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Mark ext battery sensors unavailable when that slot has no data."""
-        if not super().available or self.coordinator.data is None:
-            return False
+        """Stay available for STALE_TIMEOUT after the last successful poll.
+
+        This prevents flickering during transient BLE failures while still
+        correctly marking entities unavailable if the device is off long-term.
+        Ext battery slots go unavailable only if that slot has never had data.
+        """
+        last = self.coordinator.last_successful_poll
+        if last is None:
+            return False  # never had a successful poll yet
+        if datetime.now() - last > STALE_TIMEOUT:
+            return False  # data is too old to be trustworthy
         desc = self.entity_description
         if desc.slot is not None:
             return bool(self.coordinator.data["ext_batteries"].get(desc.slot))

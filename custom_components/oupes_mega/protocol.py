@@ -54,7 +54,7 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     22:  ("Grid Input Power",        "W"),
     23:  ("AC Input Connected",      "bool"),
     30:  ("Remaining Runtime",       "min"),
-    32:  ("Battery Pack Voltage",    "V/10"),
+    32:  ("Main Unit Temperature",    "F/10"),  # ⚠️ was labelled Battery Pack Voltage — rises under load, matches app temp display
     51:  ("Charge Mode",             "chargemode"),
     53:  ("Unknown (attr 53)",       "raw"),
     54:  ("Unknown (attr 54)",       "raw"),

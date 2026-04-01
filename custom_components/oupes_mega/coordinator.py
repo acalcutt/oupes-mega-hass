@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time as _time
+from datetime import datetime
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -16,6 +17,7 @@ from .const import (
     DOMAIN,
     MAX_ATTEMPTS,
     SCAN_DURATION,
+    STALE_TIMEOUT,
     UPDATE_INTERVAL,
 )
 from .protocol import (
@@ -32,7 +34,8 @@ from .protocol import (
 _LOGGER = logging.getLogger(__name__)
 
 # Type alias for the data dict stored in coordinator.data
-type OUPESData = dict  # {"attrs": dict[int,int], "ext_batteries": dict[int,dict[int,int]]}
+# {"attrs": dict[int,int], "ext_batteries": dict[int,dict[int,int]]}
+OUPESData = dict
 
 
 class OUPESMegaCoordinator(DataUpdateCoordinator):
@@ -55,11 +58,14 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         )
         self.address = address
         self.device_name = name
+        self.last_successful_poll: datetime | None = None
 
     # ── Public coordinator interface ──────────────────────────────────────────
 
     async def _async_update_data(self) -> OUPESData:
         """Called by the coordinator on each update interval."""
+        last_exc: Exception | None = None
+
         for attempt in range(MAX_ATTEMPTS):
             if attempt > 0:
                 wait = 3 if attempt < 2 else 6
@@ -69,27 +75,37 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 )
                 await asyncio.sleep(wait)
 
+            # Prefer a device object from HA's BT scanner cache (gives the
+            # right adapter hint), but fall back to the raw MAC string so a
+            # single missed advertisement window doesn't abort all retries.
             ble_device = async_ble_device_from_address(
                 self.hass, self.address, connectable=True
             )
             if ble_device is None:
-                raise UpdateFailed(
-                    f"BLE device {self.address} not found — "
-                    "is the device powered on and in range?"
+                _LOGGER.debug(
+                    "BLE scanner hasn't seen %s recently — attempting direct "
+                    "connect by MAC address (attempt %d/%d)",
+                    self.address, attempt + 1, MAX_ATTEMPTS,
                 )
+                ble_device = self.address  # bleak accepts a raw MAC string
 
             try:
                 dropped_quickly, data = await self._connect_once(ble_device)
-            except UpdateFailed:
-                if attempt == MAX_ATTEMPTS - 1:
-                    raise
+            except UpdateFailed as exc:
+                last_exc = exc
+                _LOGGER.debug(
+                    "Connection error on %s (attempt %d): %s",
+                    self.address, attempt + 1, exc,
+                )
                 continue
 
             if not dropped_quickly:
                 if not data["attrs"] and not any(data["ext_batteries"].values()):
-                    raise UpdateFailed(
+                    last_exc = UpdateFailed(
                         "Connected successfully but received no telemetry data"
                     )
+                    continue  # retry rather than immediately failing
+                self.last_successful_poll = datetime.now()
                 return data
 
             _LOGGER.debug(
@@ -97,9 +113,9 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 self.address, attempt + 1,
             )
 
-        raise UpdateFailed(
-            f"Device {self.address} dropped the connection on all "
-            f"{MAX_ATTEMPTS} attempts (cold-probe pattern)"
+        raise last_exc or UpdateFailed(
+            f"Device {self.address} failed to provide data after "
+            f"{MAX_ATTEMPTS} attempts"
         )
 
     # ── Internal BLE connection logic ─────────────────────────────────────────
