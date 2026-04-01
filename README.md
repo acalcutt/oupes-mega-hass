@@ -1,7 +1,7 @@
 # OUPES Mega — Home Assistant Custom Integration
 
 A local Bluetooth (BLE) integration for the **OUPES Mega 1** power station.
-Polls the device every 5 minutes over BLE and exposes ~20 Home Assistant entities
+Polls the device every minute over BLE and exposes ~20 Home Assistant entities
 (sensors + binary sensors) with no cloud dependency.
 
 ---
@@ -13,7 +13,7 @@ Polls the device every 5 minutes over BLE and exposes ~20 Home Assistant entitie
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES Mega 1 | Power on, BLE enabled |
+| OUPES Mega 1 | Power on, BLE enabled (it always is when on) |
 
 ### USB Bluetooth adapter for HA
 
@@ -84,7 +84,7 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | Total Input Power | 21 | W | Grid + solar combined |
 | Grid Input Power | 22 | W | Grid only |
 | Remaining Runtime | 30 | min | At current discharge rate |
-| Battery Pack Voltage | 32 | V | LiFePO4 pack |
+| Main Unit Temperature | 32 | °F | Internal temperature of the unit |
 | Charge Mode | 51 | — | "AC Charging" etc. |
 | Ext Battery 1–6 Charge | 79 | % | Per connected B2 battery |
 | Ext Battery 1–6 Runtime | 78 | min | |
@@ -93,6 +93,10 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 > Entities for all 6 slots are registered at setup. Slots with no connected
 > battery show as **Unavailable** and become available automatically when
 > a battery is detected. (Mega 1: up to 2 slots, Mega 2: up to 4, Mega 3: up to 6.)
+>
+> All entities retain their last known value for up to 10 minutes if a poll
+> fails (e.g. transient BLE drop). They only go unavailable if the device
+> has been unreachable for longer than that.
 
 ### Binary Sensors (on/off)
 
@@ -107,9 +111,11 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 
 ## How It Works
 
-Each update cycle (default: every 5 minutes):
+Each update cycle (default: every 1 minute):
 
 1. HA's Bluetooth scanner finds the `TT` advertisement and provides a `BLEDevice`.
+   If the device hasn't advertised recently, a direct MAC address connection is
+   attempted as a fallback so a single missed scan window doesn't cause a failure.
 2. The coordinator connects via BleakClient.
 3. Waits ~1.8 s (matching Android GATT discovery timing the device expects).
 4. Subscribes to the notify characteristic and sends an 11-packet init sequence.
@@ -118,17 +124,25 @@ Each update cycle (default: every 5 minutes):
 6. Disconnects and updates all sensor entities with the collected data.
 
 If the device makes a "cold-probe" drop (disconnects in <400 ms — normal BLE
-behaviour) the coordinator retries up to 3 times automatically.
+behaviour) the coordinator retries up to 5 times automatically.
+
+If a poll fails entirely, entities **retain their last known values** for up to
+10 minutes before going unavailable. This prevents flickering from transient
+BLE issues.
 
 ---
 
 ## Changing the Poll Interval
 
-Edit `const.py` in the integration folder and change `UPDATE_INTERVAL`:
+Edit `const.py` in the integration folder and change `UPDATE_INTERVAL` and/or
+`STALE_TIMEOUT`:
 
 ```python
-UPDATE_INTERVAL = timedelta(minutes=5)   # default
-UPDATE_INTERVAL = timedelta(minutes=1)   # more frequent
+UPDATE_INTERVAL = timedelta(minutes=1)    # default — how often to poll
+UPDATE_INTERVAL = timedelta(minutes=5)    # less frequent
+
+STALE_TIMEOUT = timedelta(minutes=10)     # default — grace period before unavailable
+STALE_TIMEOUT = timedelta(minutes=30)     # longer grace period
 ```
 
 Restart HA after changing.
