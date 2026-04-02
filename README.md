@@ -86,12 +86,22 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | Solar Input Power | 23 | W | MPPT solar input |
 | Remaining Runtime | 30 | min | At current discharge rate (inaccurate under variable load) |
 | Main Unit Temperature | 32 | °F | Internal temperature (÷10; e.g. raw 963 → 96.3 °F) |
-| Battery Module 1–2 Runtime | 78 | min | Per internal battery module; 5940 = charging/idle max |
-| Battery Module 1–2 Cell Group Index | 79 | — | BMS cell-group scan counter (0–14) |
-| Battery Module 1–2 Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
+| Battery Module 1–N Runtime | 78 | min | Per battery module; 5940 = charging/idle max |
+| Battery Module 1–N Cell Group Index | 79 | — | BMS cell-group scan counter (0–14) |
+| Battery Module 1–N Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
 | Unknown (attr 51) | 51 | — | Constant 2 in all captures; meaning unconfirmed |
 
-> The Mega 1 has two internal battery modules (slots 1 and 2). Slots with no
+> **Battery modules:** The Mega 1 has two **internal** battery modules (slots
+> 1 and 2). External **OUPES B2 Expansion Batteries** (LiFePO4, ~2 kWh each)
+> connect via cable and appear as additional slots in the BLE telemetry:
+>
+> | Model | Internal modules | Max B2 expansion batteries |
+> |-------|-----------------|-----------------------------|
+> | Mega 1 | 2 | 2 |
+> | Mega 2 | ? | 4 |
+> | Mega 3 | ? | 6 |
+>
+> This integration creates sensor entities for up to 6 slots. Slots with no
 > data are automatically marked **Unavailable** and become active when data
 > arrives. All entities retain their last known value for up to 10 minutes if
 > a poll fails. They only go unavailable if the device has been unreachable

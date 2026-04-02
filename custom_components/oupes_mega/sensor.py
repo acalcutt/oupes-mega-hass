@@ -136,12 +136,20 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
     ),
 )
 
-# ── Battery module sensors (slots 1–6, covering Mega 1/2/3 max) ─────────────
-# On Mega 1, slots 1 and 2 correspond to the two INTERNAL battery modules.
-# (Higher slots are used by external B2 expansion batteries on Mega 2/3.)
+# ── Battery module sensors (slots 1–N) ──────────────────────────────────────
+# Attr 101 carries the slot index; attrs 78/79/80 carry the per-slot values.
+#
+# On Mega 1: slots 1–2 = two INTERNAL battery modules (always present).
+# External OUPES B2 Expansion Batteries appear as additional slots.
+# Known B2 external-battery maximums per model:
+#   Mega 1 → up to 2 B2 batteries
+#   Mega 2 → up to 4 B2 batteries
+#   Mega 3 → up to 6 B2 batteries
+# Total slot count for Mega 2/3 (internal + external) is unconfirmed;
+# 6 covers the Mega 3 external-only maximum and is a safe ceiling for now.
 # Slots with no data are automatically marked unavailable by the entity.
 
-MAX_EXT_BATTERY_SLOTS = 6  # Mega 3: up to 6 × B2 batteries
+MAX_EXT_BATTERY_SLOTS = 6  # conservative ceiling; increase if Mega 2/3 exceed this
 
 
 def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
