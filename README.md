@@ -76,7 +76,7 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 
 | Entity | Attr | Unit | Notes |
 |--------|------|------|-------|
-| Battery | 3 | % | State of charge |
+| Battery Charge | 3 | % | State of charge |
 | AC Output Power | 4 | W | Load on AC outlets |
 | DC 12V Output | 6 | W | 12 V cigarette lighter output |
 | USB-C Output | 7 | W | USB-C port output power |
@@ -86,9 +86,9 @@ If auto-discovery doesn't trigger (e.g., device was off at startup):
 | Solar Input Power | 23 | W | MPPT solar input |
 | Remaining Runtime | 30 | min | At current discharge rate (inaccurate under variable load) |
 | Main Unit Temperature | 32 | °F | Internal temperature (÷10; e.g. raw 963 → 96.3 °F) |
-| Battery Module 1–N Runtime | 78 | min | Per battery module; 5940 = charging/idle max |
-| Battery Module 1–N Cell Group Index | 79 | — | BMS cell-group scan counter (0–14) |
-| Battery Module 1–N Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
+| External Battery 1–N Runtime | 78 | min | Per battery module; 5940 = charging/idle max |
+| External Battery 1–N Charge | 79 | % | Direct battery percentage (raw value = %) |
+| External Battery 1–N Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
 | Unknown (attr 51) | 51 | — | Constant 2 in all captures; meaning unconfirmed |
 
 > **Battery modules:** The Mega 1 has two **internal** battery modules (slots

@@ -73,11 +73,11 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
 # NOT external B2 expansion batteries.  Attrs 78+101 are in one packet type;
 # attrs 79+80 are in a separate packet type (never share a packet with 78/101):
 #   78 + 101: per-module remaining runtime (0→5940; 5940 = charging/idle max)
-#   79 + 80:  BMS cell-group scan index (0–14) + battery temperature in 0.1 °F
+#   79 + 80:  battery module SoC (direct %) + battery temperature in 0.1 °F
 EXT_BATTERY_ATTRS: set[int] = {78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
     78: ("Remaining Runtime",  "min"),   # per-module; 5940 = charging/idle max
-    79: ("Cell Group Index",   "raw"),   # BMS scan index 0-14 (NOT battery %)
+    79: ("Battery Module SoC",  "%"),     # direct battery % (0–100); raw value = % confirmed
     80: ("Temperature",        "F/10"),  # battery module temperature ×0.1 °F (e.g. 878 → 87.8 °F) — confirmed vs app display
 }
 

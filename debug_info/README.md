@@ -623,13 +623,13 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 | `0x35` | 53 | Unknown | — | ❓ |
 | `0x36` | 54 | Unknown | — | ❓ |
 | `0x4E` | 78 | Per-module Remaining Runtime (slot-indexed by attr 101) | **Minutes** (5940 = charging/idle max) | ✅ Two internal battery modules — NOT an external expansion battery |
-| `0x4F` | 79 | **Cell Group Index** (BMS cell-group scan counter) | `0`–`14` — cycles through cell groups; **not** battery % | ✅ Corrected — original "battery % duplicate" assumption was wrong |
-| `0x50` | 80 | **Battery Module Temperature** (slot-indexed by attr 101) | ÷10 = °F (e.g. 878 → 87.8 °F) | ✅ Confirmed vs app temperature display |
+| `0x4F` | 79 | **External Battery SoC** | Direct battery % (raw value = %; e.g. raw 15 = 15%) | ✅ Confirmed: raw 15 reported at ~15% after a few hours of charging |
+| `0x50` | 80 | **External Battery Temperature** (slot-indexed by attr 101) | ÷10 = °F (e.g. 878 → 87.8 °F) | ✅ Confirmed vs app temperature display |
 | `0x54` | 84 | AC output control (write only) | `1` = on, `0` = off | ⚠️ Observed in app control capture |
 | `0x65` | 101 | Battery module slot index | `1` or `2` — identifies which internal module attrs 78/79/80 belong to in a given packet | ✅ |
 | `0x69` | 105 | **AC Inverter Protection** (thermal/overcurrent flag) | `1` = protection active (~60s after hard trip, or during elevated-temp warning); `0` = normal | ✅ Goes `1` during 8–10 min thermal recovery; confirmed via btsnoop timestamps |
 
-> **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes). Attr 79 is BMS cell-group scan index (not battery %); attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
+> **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes). Attr 79 is direct battery % (raw value = %, confirmed: raw 15 = 15% observed during charging). Attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
 
 ---
 
@@ -662,8 +662,8 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 - **Attr 30 = main unit remaining runtime in minutes.** Values are inaccurate under variable load (e.g. 5940 shown when outputs are off/low). Fluctuates because it reflects real-time load calculation.
 - **Attr 32 = main unit temperature ÷10 in °F.** Confirmed: raw ~960 at idle = ~96 °F, consistent with app display. The earlier "probably °C" hypothesis was wrong — 96 °F is a perfectly reasonable idle temperature for the inverter internals.
 - **Attr 78 = per-module remaining runtime (internal battery modules), slot-indexed by attr 101.** The OUPES Mega 1 has two internal battery modules (slots 1 and 2) — these are NOT external B2 expansion batteries. Max value 5940 = charging/idle state.
-- **Attr 79 = Cell Group Index (BMS scan counter), NOT battery %.** Cycles 0–14 as the BMS scans each cell group. Original "battery % duplicate" assumption was incorrect.
-- **Attr 80 = Battery module temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
+- **Attr 79 = External Battery Charge (direct percentage).** Raw value = battery %; confirmed raw 15 = 15% observed during charging. The integration reports this as-is with no scaling.
+- **Attr 80 = External Battery Temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
 - **Attr 105 = AC Inverter Protection flag.** Goes `1` approximately 60 seconds after the AC output is hardware-tripped (overcurrent or thermal) and remains `1` during the 8–10 minute thermal recovery window. Also activates during elevated-temperature normal operation as a thermal warning without a hard trip. Goes `0` once the device recovers.
 - **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input, with the MPPT solar input always reporting ~1W of noise even with no panel connected. The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading.
 - **Cloud connection is BLE-dependent.** The device only connects to the cloud broker while a phone is actively BLE-paired via the Cleanergy app. With no BLE connection, all publish requests return `num=0`. This was confirmed by the official app experiencing the same failure simultaneously. **This makes the WiFi/cloud path unsuitable for unattended Home Assistant integration.**
