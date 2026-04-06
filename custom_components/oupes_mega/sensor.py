@@ -148,113 +148,91 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
     ),
 )
 
-# ── Battery module sensors (slots 1–N) ──────────────────────────────────────
-# Attr 101 carries the slot index; attrs 78/79/80 carry the per-slot values.
-#
-# Slot numbers are assigned by the firmware starting at 1 for the first
-# connected battery. On a Mega 1 with two B2 expansion batteries those are
-# slots 1 and 2. Additional batteries appear as higher slot numbers.
-# Known B2 external-battery maximums per model:
-#   Mega 1 → up to 2 B2 batteries
-#   Mega 2 → up to 4 B2 batteries
-#   Mega 3 → up to 6 B2 batteries
-# Total slot count for Mega 2/3 is unconfirmed;
-# 6 covers the Mega 3 maximum and is a safe ceiling for now.
-# Slots with no data are automatically marked unavailable by the entity.
-
-MAX_EXT_BATTERY_SLOTS = 6  # conservative ceiling; increase if Mega 2/3 exceed this
+# ── Battery module sensors (created dynamically per slot) ────────────────────
+# Attr 101 carries the slot index; attrs 78/79/80/53/54 carry the per-slot
+# values. Entities are added the first time each slot number appears in
+# coordinator data, so only the slots that actually exist on this unit are
+# ever created in HA. Additional slots appear automatically if more batteries
+# are connected later.
 
 
-def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
-    descs: list[OUPESSensorDescription] = []
-    for slot in range(1, MAX_EXT_BATTERY_SLOTS + 1):
-        display_name = f"External Battery {slot}"
-        descs.extend(
-            [
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_pct",
-                    attr=79,
-                    slot=slot,
-                    name=f"{display_name} Charge",
-                    device_class=SensorDeviceClass.BATTERY,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=PERCENTAGE,
-                    # Raw value is direct battery % (0–100).
-                    # Confirmed: raw 15 = 15% after a few hours of charging.
-                ),
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_runtime",
-                    attr=78,
-                    slot=slot,
-                    name=f"{display_name} Runtime",
-                    device_class=SensorDeviceClass.DURATION,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfTime.MINUTES,
-                    icon="mdi:timer-outline",
-                    # Attr 78 is multiplexed: ≤6000 = runtime (min), ≥44000 = voltage (mV).
-                    # Suppress non-runtime values so this entity doesn't show e.g. 53025 min.
-                    value_fn=lambda v: v if v <= 6000 else None,
-                ),
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_voltage",
-                    attr=78,
-                    data_key="last_voltage_mv",
-                    slot=slot,
-                    name=f"{display_name} Voltage",
-                    device_class=SensorDeviceClass.VOLTAGE,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-                    # Reads from the coordinator's persistent 'last_voltage_mv' key so the
-                    # last known voltage is held until a newer reading arrives.
-                    # NOTE: on current Mega 1 firmware, only slot 2 broadcasts voltage
-                    # readings in attr 78; slot 1 never does. The entity is marked
-                    # Unavailable (not Unknown) when no reading has ever arrived.
-                    value_fn=lambda v: round(v / 1000, 3),
-                ),
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_temp",
-                    attr=80,
-                    slot=slot,
-                    name=f"{display_name} Temperature",
-                    device_class=SensorDeviceClass.TEMPERATURE,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
-                    value_fn=lambda v: round(v / 10, 1),
-                ),
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_output_power",
-                    attr=54,
-                    slot=slot,
-                    name=f"{display_name} Output Power",
-                    device_class=SensorDeviceClass.POWER,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfPower.WATT,
-                    # Confirmed: attr 54 = B2 "OUTPUT W" in the app — total power
-                    # leaving the B2 (chain cable discharge to Mega + USB ports).
-                    # ~100W when B2 is discharging to Mega; ~3-6W when only USB
-                    # is active and Mega is on grid (B2 not discharging via chain).
-                ),
-                OUPESSensorDescription(
-                    key=f"ext_battery_{slot}_input_power",
-                    attr=53,
-                    slot=slot,
-                    name=f"{display_name} Input Power",
-                    device_class=SensorDeviceClass.POWER,
-                    state_class=SensorStateClass.MEASUREMENT,
-                    native_unit_of_measurement=UnitOfPower.WATT,
-                    # Confirmed: attr 53 = B2 "INPUT W" in the app — power entering
-                    # the B2 via its secondary MPPT/DC port (solar panel or DC
-                    # source). The same port also functions as the DC 12V output;
-                    # firmware reports absolute watts regardless of direction.
-                ),
-            ]
-        )
-    return descs
-
-
-EXT_BATTERY_DESCRIPTIONS: list[OUPESSensorDescription] = (
-    _make_ext_battery_descriptions()
-)
+def _slot_descriptions(slot: int) -> list[OUPESSensorDescription]:
+    """Return the six sensor descriptions for one ext-battery slot."""
+    display_name = f"External Battery {slot}"
+    return [
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_pct",
+            attr=79,
+            slot=slot,
+            name=f"{display_name} Charge",
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=PERCENTAGE,
+            # Raw value is direct battery % (0–100).
+            # Confirmed: raw 15 = 15% after a few hours of charging.
+        ),
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_runtime",
+            attr=78,
+            slot=slot,
+            name=f"{display_name} Runtime",
+            device_class=SensorDeviceClass.DURATION,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfTime.MINUTES,
+            icon="mdi:timer-outline",
+            # Attr 78 is multiplexed: ≤6000 = runtime (min), ≥44000 = voltage (mV).
+            # Suppress non-runtime values so this entity doesn't show e.g. 53025 min.
+            value_fn=lambda v: v if v <= 6000 else None,
+        ),
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_voltage",
+            attr=78,
+            data_key="last_voltage_mv",
+            slot=slot,
+            name=f"{display_name} Voltage",
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+            # Reads from the coordinator's persistent 'last_voltage_mv' key so the
+            # last known voltage is held until a newer reading arrives.
+            # NOTE: on current Mega 1 firmware, only slot 2 broadcasts voltage
+            # readings in attr 78; slot 1 never does. The entity is marked
+            # Unavailable (not Unknown) when no reading has ever arrived.
+            value_fn=lambda v: round(v / 1000, 3),
+        ),
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_temp",
+            attr=80,
+            slot=slot,
+            name=f"{display_name} Temperature",
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
+            value_fn=lambda v: round(v / 10, 1),
+        ),
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_output_power",
+            attr=54,
+            slot=slot,
+            name=f"{display_name} Output Power",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            # Confirmed: attr 54 = B2 "OUTPUT W" in the app — total power
+            # leaving the B2 (chain cable discharge to Mega + USB ports).
+        ),
+        OUPESSensorDescription(
+            key=f"ext_battery_{slot}_input_power",
+            attr=53,
+            slot=slot,
+            name=f"{display_name} Input Power",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement=UnitOfPower.WATT,
+            # Confirmed: attr 53 = B2 "INPUT W" in the app — power entering
+            # the B2 via its secondary MPPT/DC port (solar panel or DC source).
+        ),
+    ]
 
 
 # ── Entity class ──────────────────────────────────────────────────────────────
@@ -335,7 +313,33 @@ async def async_setup_entry(
 ) -> None:
     """Set up OUPES Mega sensor entities."""
     coordinator: OUPESMegaCoordinator = hass.data[DOMAIN][entry.entry_id]
+
+    # Add main device sensors immediately.
     async_add_entities(
         OUPESMegaSensor(coordinator, desc, entry)
-        for desc in [*SENSOR_DESCRIPTIONS, *EXT_BATTERY_DESCRIPTIONS]
+        for desc in SENSOR_DESCRIPTIONS
     )
+
+    # Ext-battery entities are created on-demand the first time each slot
+    # number appears in coordinator data.  This way only batteries that are
+    # actually connected to THIS unit are ever registered in HA.
+    seen_slots: set[int] = set()
+
+    def _add_new_slots() -> None:
+        if not coordinator.data:
+            return
+        new_slots = set(coordinator.data["ext_batteries"].keys()) - seen_slots
+        if not new_slots:
+            return
+        new_entities = [
+            OUPESMegaSensor(coordinator, desc, entry)
+            for slot in sorted(new_slots)
+            for desc in _slot_descriptions(slot)
+        ]
+        seen_slots.update(new_slots)
+        async_add_entities(new_entities)
+
+    # Run once immediately (first refresh already completed by this point)
+    # then re-run on every subsequent coordinator update.
+    _add_new_slots()
+    entry.async_on_unload(coordinator.async_add_listener(_add_new_slots))

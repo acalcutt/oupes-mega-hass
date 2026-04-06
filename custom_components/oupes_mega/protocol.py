@@ -132,6 +132,22 @@ def build_output_command(bitmask: int) -> bytes:
     return bytes(pkt)
 
 
+def build_init_sequence(device_key: str = "bd236b1695") -> list[bytes]:
+    """Return APP_INIT_SEQUENCE with packet 6 rebuilt for *device_key*.
+
+    Packet 6 (index 6) embeds the per-device 10-character ASCII hex token at
+    bytes 4–13.  All other packets are identical across devices.
+    """
+    key_bytes = device_key.encode("ascii").ljust(10, b"\x00")[:10]
+    pkt6 = bytearray(20)
+    pkt6[0:4] = b"\x01\x06\x00\x00"
+    pkt6[4:14] = key_bytes
+    pkt6[19] = _crc8(bytes(pkt6[:19]))
+    pkts = list(APP_INIT_SEQUENCE)
+    pkts[6] = bytes(pkt6)
+    return pkts
+
+
 # ── Packet parser ─────────────────────────────────────────────────────────────
 
 def parse_ble_packet(data: bytearray) -> dict[int, int]:

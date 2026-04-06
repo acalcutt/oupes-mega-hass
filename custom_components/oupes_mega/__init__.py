@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_NAME, DOMAIN
+from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_DEVICE_KEY, CONF_NAME, DOMAIN
 from .coordinator import OUPESMegaCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,8 +24,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     continuous: bool = entry.options.get(CONF_CONTINUOUS, False)
     debug_attrs: bool = entry.options.get(CONF_DEBUG_ATTRS, False)
     debug_raw: bool = entry.options.get(CONF_DEBUG_RAW, False)
+    device_key: str = (
+        entry.options.get(CONF_DEVICE_KEY)
+        or entry.data.get(CONF_DEVICE_KEY)
+        or "bd236b1695"
+    )
     coordinator = OUPESMegaCoordinator(
         hass, address, name,
+        device_key=device_key,
         continuous=continuous,
         debug_attrs=debug_attrs,
         debug_raw=debug_raw,

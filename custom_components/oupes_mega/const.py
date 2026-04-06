@@ -21,6 +21,11 @@ SCAN_DURATION = 15.0
 # Max cold-probe retries per coordinator update cycle
 MAX_ATTEMPTS = 5
 
+# Config entry data key — the per-device 10-character hex init token.
+# Found at bytes 4–13 of BLE init packet 6 (from a btsnoop/PCAPdroid capture).
+# Likely per-device; the example value "bd236b1695" is from a single known unit.
+CONF_DEVICE_KEY = "device_key"
+
 # Config entry options key — whether to hold the BLE connection open permanently
 # instead of polling every UPDATE_INTERVAL seconds.
 CONF_CONTINUOUS = "continuous_connection"

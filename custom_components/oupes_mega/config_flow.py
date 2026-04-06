@@ -20,9 +20,15 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_NAME, DOMAIN
+from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_DEVICE_KEY, CONF_NAME, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+_HEX_CHARS = frozenset("0123456789abcdefABCDEF")
+
+
+def _valid_device_key(key: str) -> bool:
+    return len(key) == 10 and all(c in _HEX_CHARS for c in key)
 
 
 class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -64,21 +70,31 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Confirm adding the auto-discovered device."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(
-                title=self._discovered_name,
-                data={
-                    CONF_ADDRESS: self._discovered_address,
-                    CONF_NAME: self._discovered_name,
-                },
-            )
+            raw_key = user_input.get(CONF_DEVICE_KEY, "").strip()
+            if raw_key and not _valid_device_key(raw_key):
+                errors[CONF_DEVICE_KEY] = "invalid_device_key"
+            else:
+                return self.async_create_entry(
+                    title=self._discovered_name,
+                    data={
+                        CONF_ADDRESS: self._discovered_address,
+                        CONF_NAME: self._discovered_name,
+                        CONF_DEVICE_KEY: raw_key,
+                    },
+                )
 
         return self.async_show_form(
             step_id="bluetooth_confirm",
+            data_schema=vol.Schema(
+                {vol.Optional(CONF_DEVICE_KEY, default=""): str}
+            ),
             description_placeholders={
                 "name": self._discovered_name,
                 "address": self._discovered_address,
             },
+            errors=errors,
         )
 
     # ── Manual setup ─────────────────────────────────────────────────────────
@@ -92,17 +108,20 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             address = user_input[CONF_ADDRESS].upper().strip()
             name = (user_input.get(CONF_NAME) or "OUPES Mega").strip()
+            raw_key = user_input.get(CONF_DEVICE_KEY, "").strip()
 
             # Basic MAC address format validation
             parts = address.split(":")
             if len(parts) != 6 or not all(len(p) == 2 for p in parts):
                 errors[CONF_ADDRESS] = "invalid_address"
+            elif raw_key and not _valid_device_key(raw_key):
+                errors[CONF_DEVICE_KEY] = "invalid_device_key"
             else:
                 await self.async_set_unique_id(address)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
                     title=name,
-                    data={CONF_ADDRESS: address, CONF_NAME: name},
+                    data={CONF_ADDRESS: address, CONF_NAME: name, CONF_DEVICE_KEY: raw_key},
                 )
 
         # Pre-fill with any 'TT' device already seen by HA's bluetooth scanner
@@ -117,6 +136,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_ADDRESS, default=suggested_address): str,
                 vol.Optional(CONF_NAME, default="OUPES Mega"): str,
+                vol.Optional(CONF_DEVICE_KEY, default=""): str,
             }
         )
         return self.async_show_form(
@@ -135,13 +155,25 @@ class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            raw_key = user_input.get(CONF_DEVICE_KEY, "").strip()
+            if raw_key and not _valid_device_key(raw_key):
+                errors[CONF_DEVICE_KEY] = "invalid_device_key"
+            else:
+                return self.async_create_entry(title="", data=user_input)
 
+        # Default: prefer existing options value, fall back to value stored at setup time
+        current_key = (
+            self._entry.options.get(CONF_DEVICE_KEY)
+            or self._entry.data.get(CONF_DEVICE_KEY)
+            or ""
+        )
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(CONF_DEVICE_KEY, default=current_key): str,
                     vol.Required(
                         CONF_CONTINUOUS,
                         default=self._entry.options.get(CONF_CONTINUOUS, False),
@@ -156,4 +188,5 @@ class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
                     ): bool,
                 }
             ),
+            errors=errors,
         )

@@ -26,7 +26,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 from .protocol import (
-    APP_INIT_SEQUENCE,
+    build_init_sequence,
     ATTR_MAP,
     EXT_BATTERY_ATTRS,
     EXT_BATTERY_MAP,
@@ -66,6 +66,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         address: str,
         name: str,
         *,
+        device_key: str = "bd236b1695",
         continuous: bool = False,
         debug_attrs: bool = False,
         debug_raw: bool = False,
@@ -80,6 +81,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         self.device_name = name
         self.last_successful_poll: datetime | None = None
         self._pending_command: bytes | None = None
+        self._init_sequence = build_init_sequence(device_key)
         self._continuous = continuous
         self._live_data: OUPESData | None = None
         self._continuous_task: asyncio.Task | None = None
@@ -334,7 +336,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 if disconnected_event.is_set():
                     return
 
-                for i, pkt in enumerate(APP_INIT_SEQUENCE):
+                for i, pkt in enumerate(self._init_sequence):
                     if disconnected_event.is_set():
                         return
                     try:
@@ -487,7 +489,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     return True, data
 
                 # ── Step 3: send 11-packet init sequence ─────────────────────
-                for i, pkt in enumerate(APP_INIT_SEQUENCE):
+                for i, pkt in enumerate(self._init_sequence):
                     if disconnected_event.is_set():
                         uptime = _time.monotonic() - connect_ts
                         return (uptime < 2.0 and not got_data), data
