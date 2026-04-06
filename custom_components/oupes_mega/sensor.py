@@ -41,6 +41,9 @@ class OUPESSensorDescription(SensorEntityDescription):
     slot: int | None = None
     # Optional transform from raw integer to the value exposed to HA
     value_fn: Callable[[int], float | str] | None = None
+    # Override the dict key used to look up the value in coordinator.data.
+    # When set, this is used instead of `attr` for the data lookup.
+    data_key: str | int | None = None
 
 
 # ── Main device sensors ───────────────────────────────────────────────────────
@@ -58,6 +61,14 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         key="ac_output_power",
         attr=4,
         name="AC Output Power",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+    ),
+    OUPESSensorDescription(
+        key="ac_output_power_alt",
+        attr=5,
+        name="AC Output Power (Alt)",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -177,6 +188,22 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfTime.MINUTES,
                     icon="mdi:timer-outline",
+                    # Attr 78 is multiplexed: ≤6000 = runtime (min), ≥44000 = voltage (mV).
+                    # Suppress non-runtime values so this entity doesn't show e.g. 53025 min.
+                    value_fn=lambda v: v if v <= 6000 else None,
+                ),
+                OUPESSensorDescription(
+                    key=f"ext_battery_{slot}_voltage",
+                    attr=78,
+                    data_key="last_voltage_mv",
+                    slot=slot,
+                    name=f"External Battery {slot} Voltage",
+                    device_class=SensorDeviceClass.VOLTAGE,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+                    # Reads from the coordinator's persistent 'last_voltage_mv' key so the
+                    # last known voltage is held until a newer reading arrives.
+                    value_fn=lambda v: round(v / 1000, 3),
                 ),
                 OUPESSensorDescription(
                     key=f"ext_battery_{slot}_temp",
@@ -246,8 +273,9 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
             return None
         desc = self.entity_description
         if desc.slot is not None:
+            lookup = desc.data_key if desc.data_key is not None else desc.attr
             raw = self.coordinator.data["ext_batteries"].get(desc.slot, {}).get(
-                desc.attr
+                lookup
             )
         else:
             raw = self.coordinator.data["attrs"].get(desc.attr)

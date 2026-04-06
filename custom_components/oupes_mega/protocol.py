@@ -72,13 +72,22 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
 # On the OUPES Mega 1 these reflect the device's two INTERNAL battery modules,
 # NOT external B2 expansion batteries.  Attrs 78+101 are in one packet type;
 # attrs 79+80 are in a separate packet type (never share a packet with 78/101):
-#   78 + 101: per-module remaining runtime (0→5940; 5940 = charging/idle max)
+#   78 + 101: per-module MULTIPLEXED data — see attr 78 note below
 #   79 + 80:  battery module SoC (direct %) + battery temperature in 0.1 °F
 EXT_BATTERY_ATTRS: set[int] = {78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
-    78: ("Remaining Runtime",  "min"),   # per-module; 5940 = charging/idle max
-    79: ("Battery Module SoC",  "%"),     # direct battery % (0–100); raw value = % confirmed
-    80: ("Temperature",        "F/10"),  # battery module temperature ×0.1 °F (e.g. 878 → 87.8 °F) — confirmed vs app display
+    78: ("Remaining Runtime / Voltage", "min/mV"),
+                                                  # MULTIPLEXED by value range:
+                                                  #   0–5940      = per-module remaining runtime in minutes
+                                                  #                 (5940 = charging/idle sentinel ≈ 99 h)
+                                                  #   44000–58500 = battery pack voltage in millivolts ← CONFIRMED
+                                                  #                 e.g. 53025 = 53.025 V (51.2 V nominal LiFePO4,
+                                                  #                 range 44 V empty → 58.4 V full charge)
+                                                  #                 correlation: higher mV = higher SoC ✓
+                                                  #   8000–30000  = unknown; values spaced ~1690 apart,
+                                                  #                 possibly time-to-full estimate in some unit
+    79: ("Battery Module SoC",          "%"),     # direct battery % (0–100); raw value = % confirmed
+    80: ("Temperature",                 "F/10"),  # battery module temperature ×0.1 °F (e.g. 878 → 87.8 °F) — confirmed vs app display
 }
 
 # Convenience set of attrs that should become binary sensors

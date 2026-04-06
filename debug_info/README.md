@@ -609,7 +609,7 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 | `0x02` | 2 | Unknown (possibly legacy output flag) | — | ❓ Superseded by attr 1 bitmask; original "DC output enabled" assumption unconfirmed |
 | `0x03` | 3 | Battery percentage | `0`–`100` | ✅ App shows 100% |
 | `0x04` | 4 | AC output power | Watts | ✅ App shows 494–502W |
-| `0x05` | 5 | Unknown (mirrors AC output power) | Watts — identical to attr 4 in all capture conditions including pure discharge | ⚠️ Possibly a second AC output measurement point |
+| `0x05` | 5 | **AC Output Power (second reporting point)** | Watts — identical to attr 4; emitted ~1 s offset in a different BLE packet subtype; avg delta < 1W across all test conditions (idle, USB load, pure discharge) | ✅ Confirmed same measurement as attr 4 via live USB-load correlation |
 | `0x06` | 6 | DC 12V Output power (cigarette-lighter port) | Watts | ✅ Output port, not input |
 | `0x07` | 7 | USB-C Output power | Watts | ✅ |
 | `0x08` | 8 | USB-A Output power | Watts | ✅ |
@@ -622,14 +622,14 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 | `0x33` | 51 | Unknown (constant=2 in all captures) | — | ❓ Not a charging mode indicator |
 | `0x35` | 53 | Unknown | — | ❓ |
 | `0x36` | 54 | Unknown | — | ❓ |
-| `0x4E` | 78 | Per-module Remaining Runtime (slot-indexed by attr 101) | **Minutes** (5940 = charging/idle max) | ✅ Two internal battery modules — NOT an external expansion battery |
+| `0x4E` | 78 | **Per-module multiplexed field** (slot-indexed by attr 101) | **Three distinct ranges:** (1) `0–6000` = remaining runtime in **minutes** (5940 = max/idle); (2) `44000–58500` = per-module battery **voltage in mV** (÷1000 = V; e.g. 46310 → 46.310 V, consistent with 51.2V LiFePO4 operating range); (3) `6001–43999` = mystery status codes (see Notes) | ✅ Runtime and voltage ranges confirmed; mystery range observed only in first BLE session |
 | `0x4F` | 79 | **External Battery SoC** | Direct battery % (raw value = %; e.g. raw 15 = 15%) | ✅ Confirmed: raw 15 reported at ~15% after a few hours of charging |
 | `0x50` | 80 | **External Battery Temperature** (slot-indexed by attr 101) | ÷10 = °F (e.g. 878 → 87.8 °F) | ✅ Confirmed vs app temperature display |
 | `0x54` | 84 | AC output control (write only) | `1` = on, `0` = off | ⚠️ Observed in app control capture |
 | `0x65` | 101 | Battery module slot index | `1` or `2` — identifies which internal module attrs 78/79/80 belong to in a given packet | ✅ |
 | `0x69` | 105 | **AC Inverter Protection** (thermal/overcurrent flag) | `1` = protection active (~60s after hard trip, or during elevated-temp warning); `0` = normal | ✅ Goes `1` during 8–10 min thermal recovery; confirmed via btsnoop timestamps |
 
-> **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes). Attr 79 is direct battery % (raw value = %, confirmed: raw 15 = 15% observed during charging). Attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
+> **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes; goes **above 6000** specifically at 100% SoC as a sentinel — normal max during discharge/charge is 5940). Attr 79 is direct battery % (raw value = %, confirmed: raw 15 = 15% observed during charging; bounces rapidly between 99 and 100 at the SoC=100% boundary due to ADC noise). Attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
 
 ---
 
@@ -649,7 +649,8 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 | Grid input | 30W | attr 22 ✅ |
 | Solar input | Watts (0 with no panel) | attr 23 ✅ |
 | AC + Solar total input | Watts | attr 21 ✅ |
-| Internal module runtime (slot 1 or 2) | Minutes (5940 = charging/idle max) | attr 78 + slot from attr 101 ✅ |
+| Internal module runtime (slot 1 or 2) | Minutes (0–6000; >6000 = 100% SoC sentinel) | attr 78 (runtime range) + slot from attr 101 ✅ |
+| Internal module voltage (slot 1 or 2) | mV ÷ 1000 = V (e.g. 46310 → 46.310 V) | attr 78 (voltage range 44000–58500) + slot from attr 101 ✅ |
 | Internal module temperature | ÷10 °F (e.g. 878 → 87.8 °F) | attr 80 + slot from attr 101 ✅ |
 | AC inverter protection active | boolean | attr 105 ✅ |
 
@@ -659,9 +660,9 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 
 ## Notes & Unknowns
 
-- **Attr 30 = main unit remaining runtime in minutes.** Values are inaccurate under variable load (e.g. 5940 shown when outputs are off/low). Fluctuates because it reflects real-time load calculation.
+- **Attr 30 = main unit remaining runtime in minutes.** Values are inaccurate under variable load. Goes **above 6000** specifically at 100% SoC (float-charge sentinel) — treat any value >6000 as "fully charged". Normal max during charge/discharge cycle is 5940.
 - **Attr 32 = main unit temperature ÷10 in °F.** Confirmed: raw ~960 at idle = ~96 °F, consistent with app display. The earlier "probably °C" hypothesis was wrong — 96 °F is a perfectly reasonable idle temperature for the inverter internals.
-- **Attr 78 = per-module remaining runtime (internal battery modules), slot-indexed by attr 101.** The OUPES Mega 1 has two internal battery modules (slots 1 and 2) — these are NOT external B2 expansion batteries. Max value 5940 = charging/idle state.
+- **Attr 78 = per-module multiplexed field (slot-indexed by attr 101).** Three value ranges carry distinct data: runtime in minutes (≤6000; 5940 = charging/idle idle max for non-100% states), voltage in mV (44000–58500; ÷1000 = V), and mystery status codes (6001–43999; initial hardware boot session only — see Notes).
 - **Attr 79 = External Battery Charge (direct percentage).** Raw value = battery %; confirmed raw 15 = 15% observed during charging. The integration reports this as-is with no scaling.
 - **Attr 80 = External Battery Temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
 - **Attr 105 = AC Inverter Protection flag.** Goes `1` approximately 60 seconds after the AC output is hardware-tripped (overcurrent or thermal) and remains `1` during the 8–10 minute thermal recovery window. Also activates during elevated-temperature normal operation as a thermal warning without a hard trip. Goes `0` once the device recovers.
@@ -681,3 +682,7 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 - **Attr 1 is a bitmask for all three outputs**, not a simple AC on/off flag. bit0=`0x01`=AC, bit1=`0x02`=DC 12V, bit2=`0x04`=USB. Write the full bitmask (OR of desired bits) to control outputs independently — see [BLE Output Control](#ble-output-control).
 - **Attr 101 is the battery module slot index** (`1` or `2`), identifying which internal battery module the accompanying attrs 78/79/80 data belongs to in a given packet. Not a charging source flag.
 - **Unpolled attr ranges:** The device silently ignores attrs it doesn't recognise. Main unit temperature (attr 32) and remaining runtime (attr 30) are now confirmed. Attr 2 is unclear — may be a legacy flag superseded by the attr 1 bitmask.
+- **Attr 5 is the same measurement as attr 4.** Live correlation across idle, 6W USB load, and pure-discharge conditions showed avg delta < 1W with ~1 s timing offset. Attr 5 is emitted in a different BLE packet subtype (byte 1 = `0x81`) roughly one poll cycle later than attr 4 (byte 1 = `0x00`). No scenario was found where the values diverge meaningfully.
+- **Attr 78 multiplexes three distinct value ranges across the same attribute number.** Within a single BLE session it can carry: (1) runtime in minutes (≤6000), (2) per-module battery voltage in mV (44000–58500; ÷1000 gives volts in the expected LiFePO4 operating range of ~44V–58V), or (3) mystery status codes (6001–43999). The active range changes within the session; both (1) and (2) were observed in the same live session. Range selection appears to be firmware-driven (not poll-controlled).
+- **Attr 78 mystery value range (6001–43999):** Four distinct values observed: `27499`, `16863`, `37873`, `6838`. All appeared only in one BLE session immediately after the device was first powered on (first-ever BLE connection after hardware boot), with SoC=100% and grid connected. Subsequent sessions — including repeated reconnects, HA restarts, plug/unplug cycles, and a full recharge cycle — produced zero mystery values. The values correlated precisely with grid state: `27499` appeared continuously on slot 1 while the grid was connected at 100% (trickle/float-charge condition). Within 3 seconds of grid disconnect, a burst occurred: slot 2 → `37873`, slot 1 → `16863`, slot 2 → `6838`. Probable interpretation: firmware-level per-slot status codes emitted once per hardware boot session. **Only a full device power cycle (hold power button off then on) is expected to reproduce them.**
+- **Attr 30 sentinel at 100% SoC:** Remaining runtime (attr 30) goes above 6000 specifically when SoC = 100% and the device is in float-charge mode. Normal charging/discharging max is 5940. The >6000 value should be treated as a sentinel meaning "fully charged / no meaningful runtime estimate".

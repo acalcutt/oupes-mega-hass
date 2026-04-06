@@ -20,7 +20,7 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import CONF_ADDRESS, CONF_NAME, DOMAIN
+from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_NAME, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +29,13 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for OUPES Mega."""
 
     VERSION = 1
+
+    @staticmethod
+    @config_entries.callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> "OUPESMegaOptionsFlow":
+        return OUPESMegaOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._discovered_address: str | None = None
@@ -116,4 +123,37 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=schema,
             errors=errors,
+        )
+
+
+class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
+    """Options flow — lets the user toggle continuous BLE connection mode."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONTINUOUS,
+                        default=self._entry.options.get(CONF_CONTINUOUS, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_DEBUG_ATTRS,
+                        default=self._entry.options.get(CONF_DEBUG_ATTRS, False),
+                    ): bool,
+                    vol.Required(
+                        CONF_DEBUG_RAW,
+                        default=self._entry.options.get(CONF_DEBUG_RAW, False),
+                    ): bool,
+                }
+            ),
         )
