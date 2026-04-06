@@ -143,7 +143,7 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         key="expansion_battery_count",
         attr=51,
         name="Expansion Battery Count",
-        icon="mdi:battery-multiple",
+        icon="mdi:battery-plus",
         state_class=SensorStateClass.MEASUREMENT,
     ),
 )
