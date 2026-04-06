@@ -58,17 +58,17 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
     ),
     OUPESSensorDescription(
-        key="ac_output_power",
+        key="total_output_power",
         attr=4,
-        name="AC Output Power",
+        name="Total Output Power",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
     ),
     OUPESSensorDescription(
-        key="ac_output_power_alt",
+        key="ac_output_power",
         attr=5,
-        name="AC Output Power (Alt)",
+        name="AC Output Power",
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfPower.WATT,
@@ -150,14 +150,15 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
 # ── Battery module sensors (slots 1–N) ──────────────────────────────────────
 # Attr 101 carries the slot index; attrs 78/79/80 carry the per-slot values.
 #
-# On Mega 1: slots 1–2 = two INTERNAL battery modules (always present).
-# External OUPES B2 Expansion Batteries appear as additional slots.
+# Slot numbers are assigned by the firmware starting at 1 for the first
+# connected battery. On a Mega 1 with two B2 expansion batteries those are
+# slots 1 and 2. Additional batteries appear as higher slot numbers.
 # Known B2 external-battery maximums per model:
 #   Mega 1 → up to 2 B2 batteries
 #   Mega 2 → up to 4 B2 batteries
 #   Mega 3 → up to 6 B2 batteries
-# Total slot count for Mega 2/3 (internal + external) is unconfirmed;
-# 6 covers the Mega 3 external-only maximum and is a safe ceiling for now.
+# Total slot count for Mega 2/3 is unconfirmed;
+# 6 covers the Mega 3 maximum and is a safe ceiling for now.
 # Slots with no data are automatically marked unavailable by the entity.
 
 MAX_EXT_BATTERY_SLOTS = 6  # conservative ceiling; increase if Mega 2/3 exceed this
@@ -166,13 +167,14 @@ MAX_EXT_BATTERY_SLOTS = 6  # conservative ceiling; increase if Mega 2/3 exceed t
 def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
     descs: list[OUPESSensorDescription] = []
     for slot in range(1, MAX_EXT_BATTERY_SLOTS + 1):
+        display_name = f"External Battery {slot}"
         descs.extend(
             [
                 OUPESSensorDescription(
                     key=f"ext_battery_{slot}_pct",
                     attr=79,
                     slot=slot,
-                    name=f"External Battery {slot} Charge",
+                    name=f"{display_name} Charge",
                     device_class=SensorDeviceClass.BATTERY,
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=PERCENTAGE,
@@ -183,7 +185,7 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     key=f"ext_battery_{slot}_runtime",
                     attr=78,
                     slot=slot,
-                    name=f"External Battery {slot} Runtime",
+                    name=f"{display_name} Runtime",
                     device_class=SensorDeviceClass.DURATION,
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfTime.MINUTES,
@@ -197,19 +199,22 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     attr=78,
                     data_key="last_voltage_mv",
                     slot=slot,
-                    name=f"External Battery {slot} Voltage",
+                    name=f"{display_name} Voltage",
                     device_class=SensorDeviceClass.VOLTAGE,
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfElectricPotential.VOLT,
                     # Reads from the coordinator's persistent 'last_voltage_mv' key so the
                     # last known voltage is held until a newer reading arrives.
+                    # NOTE: on current Mega 1 firmware, only slot 2 broadcasts voltage
+                    # readings in attr 78; slot 1 never does. The entity is marked
+                    # Unavailable (not Unknown) when no reading has ever arrived.
                     value_fn=lambda v: round(v / 1000, 3),
                 ),
                 OUPESSensorDescription(
                     key=f"ext_battery_{slot}_temp",
                     attr=80,
                     slot=slot,
-                    name=f"External Battery {slot} Temperature",
+                    name=f"{display_name} Temperature",
                     device_class=SensorDeviceClass.TEMPERATURE,
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
@@ -256,6 +261,8 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
         This prevents flickering during transient BLE failures while still
         correctly marking entities unavailable if the device is off long-term.
         Ext battery slots go unavailable only if that slot has never had data.
+        Voltage entities go unavailable if the firmware has never emitted a
+        voltage reading for that slot (e.g. slot 1 on current Mega 1 firmware).
         """
         last = self.coordinator.last_successful_poll
         if last is None:
@@ -264,7 +271,14 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
             return False  # data is too old to be trustworthy
         desc = self.entity_description
         if desc.slot is not None:
-            return bool(self.coordinator.data["ext_batteries"].get(desc.slot))
+            slot_data = self.coordinator.data["ext_batteries"].get(desc.slot)
+            if not slot_data:
+                return False  # slot never seen
+            # Voltage entity requires a historical reading; without one it is
+            # Unavailable (not Unknown) so the user knows it is unsupported.
+            if desc.data_key == "last_voltage_mv" and "last_voltage_mv" not in slot_data:
+                return False
+            return True
         return True
 
     @property
