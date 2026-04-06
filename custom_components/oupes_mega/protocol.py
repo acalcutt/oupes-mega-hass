@@ -74,7 +74,7 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
 # attrs 79+80 are in a separate packet type (never share a packet with 78/101):
 #   78 + 101: per-module MULTIPLEXED data — see attr 78 note below
 #   79 + 80:  battery module SoC (direct %) + battery temperature in 0.1 °F
-EXT_BATTERY_ATTRS: set[int] = {78, 79, 80}
+EXT_BATTERY_ATTRS: set[int] = {53, 54, 78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
     78: ("Remaining Runtime / Voltage", "min/mV"),
                                                   # MULTIPLEXED by value range:

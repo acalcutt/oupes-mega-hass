@@ -272,7 +272,9 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
 
     async def _connect_continuous(self) -> None:
         """Hold an open BLE connection, pushing data to HA after each keepalive."""
-        attrs: dict[int, int] = {}
+        # Pre-seed attrs that the firmware only sends sporadically so their
+        # entities hold a stable value instead of oscillating to Unknown.
+        attrs: dict[int, int] = {105: 0}  # AC Inverter Protection default = off
         ext_batteries: dict[int, dict[int, int]] = {}
         current_slot = 1
         disconnected_event = asyncio.Event()
@@ -418,7 +420,9 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                               (caller should retry); False otherwise.
             data            — dict with keys 'attrs' and 'ext_batteries'.
         """
-        attrs: dict[int, int] = {}
+        # Pre-seed attrs that the firmware only sends sporadically so their
+        # entities hold a stable value instead of oscillating to Unknown.
+        attrs: dict[int, int] = {105: 0}  # AC Inverter Protection default = off
         ext_batteries: dict[int, dict[int, int]] = {}
         current_slot = 1
         got_data = False

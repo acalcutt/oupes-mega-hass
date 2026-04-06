@@ -140,10 +140,11 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
         value_fn=lambda v: round(v / 10, 1),
     ),
     OUPESSensorDescription(
-        key="unknown_attr51",
+        key="expansion_battery_count",
         attr=51,
-        name="Unknown (attr 51)",
-        icon="mdi:help-circle-outline",
+        name="Expansion Battery Count",
+        icon="mdi:battery-multiple",
+        state_class=SensorStateClass.MEASUREMENT,
     ),
 )
 
@@ -219,6 +220,32 @@ def _make_ext_battery_descriptions() -> list[OUPESSensorDescription]:
                     state_class=SensorStateClass.MEASUREMENT,
                     native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,
                     value_fn=lambda v: round(v / 10, 1),
+                ),
+                OUPESSensorDescription(
+                    key=f"ext_battery_{slot}_output_power",
+                    attr=54,
+                    slot=slot,
+                    name=f"{display_name} Output Power",
+                    device_class=SensorDeviceClass.POWER,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement=UnitOfPower.WATT,
+                    # Confirmed: attr 54 = B2 "OUTPUT W" in the app — total power
+                    # leaving the B2 (chain cable discharge to Mega + USB ports).
+                    # ~100W when B2 is discharging to Mega; ~3-6W when only USB
+                    # is active and Mega is on grid (B2 not discharging via chain).
+                ),
+                OUPESSensorDescription(
+                    key=f"ext_battery_{slot}_input_power",
+                    attr=53,
+                    slot=slot,
+                    name=f"{display_name} Input Power",
+                    device_class=SensorDeviceClass.POWER,
+                    state_class=SensorStateClass.MEASUREMENT,
+                    native_unit_of_measurement=UnitOfPower.WATT,
+                    # Confirmed: attr 53 = B2 "INPUT W" in the app — power entering
+                    # the B2 via its secondary MPPT/DC port (solar panel or DC
+                    # source). The same port also functions as the DC 12V output;
+                    # firmware reports absolute watts regardless of direction.
                 ),
             ]
         )
