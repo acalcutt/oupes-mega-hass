@@ -616,7 +616,7 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 | `0x09` | 9 | Unknown | — | ❓ |
 | `0x15` | 21 | Total Input Power (grid + solar) | Watts | ✅ Consistently 1W higher than attr 22 — accounts for solar MPPT noise floor |
 | `0x16` | 22 | Grid Input Power (wall charge) | Watts, 1:1 raw | ✅ Confirmed vs app "Grid" display |
-| `0x17` | 23 | Solar Input Power (MPPT) | Watts — `0` with no panel connected | ✅ Tracks app SOLAR reading exactly |
+| `0x17` | 23 | Solar Input Power (MPPT) | Watts — MPPT circuit reports `1` intermittently even with nothing connected (confirmed in official app); `0` when grid is off/device idle; tested with a DC battery source on the solar port (real solar panel not available) | ✅ Tracks app SOLAR reading; confirmed the solar port accepts any DC input, not just panels |
 | `0x1E` | 30 | Remaining Runtime (main unit) | **Minutes** (inaccurate under variable load; e.g. 5940 ≈ 99h shown when outputs off) | ✅ |
 | `0x20` | 32 | **Main Unit Temperature** | ÷10 = °F (e.g. raw 963 → 96.3 °F at idle) | ✅ Confirmed — raw ~960 at idle matches app temperature display |
 | `0x33` | 51 | Unknown (constant=2 in all captures) | — | ❓ Not a charging mode indicator |
@@ -647,7 +647,7 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 | USB-C output watts | Watts | attr 7 ✅ |
 | USB-A output watts | Watts | attr 8 ✅ |
 | Grid input | 30W | attr 22 ✅ |
-| Solar input | Watts (0 with no panel) | attr 23 ✅ |
+| Solar input | Watts (1 = MPPT noise floor; 0 when idle) | attr 23 ✅ |
 | AC + Solar total input | Watts | attr 21 ✅ |
 | Internal module runtime (slot 1 or 2) | Minutes (0–6000; >6000 = 100% SoC sentinel) | attr 78 (runtime range) + slot from attr 101 ✅ |
 | Internal module voltage (slot 1 or 2) | mV ÷ 1000 = V (e.g. 46310 → 46.310 V) | attr 78 (voltage range 44000–58500) + slot from attr 101 ✅ |
@@ -666,7 +666,8 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 - **Attr 79 = External Battery Charge (direct percentage).** Raw value = battery %; confirmed raw 15 = 15% observed during charging. The integration reports this as-is with no scaling.
 - **Attr 80 = External Battery Temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
 - **Attr 105 = AC Inverter Protection flag.** Goes `1` approximately 60 seconds after the AC output is hardware-tripped (overcurrent or thermal) and remains `1` during the 8–10 minute thermal recovery window. Also activates during elevated-temperature normal operation as a thermal warning without a hard trip. Goes `0` once the device recovers.
-- **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input, with the MPPT solar input always reporting ~1W of noise even with no panel connected. The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading.
+- **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input. The 1W difference is the MPPT noise floor from attr 23 — confirmed to appear in the official app even with no panel connected, and confirmed in live CSV data (attr 23 = 1 during grid-on periods, 0 when grid is off). The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading.
+- **Solar port and attr 23 testing used a DC battery source,** not a real solar panel (no panel available). The port accepted DC input from the battery correctly; attr 23 reflected the input wattage as expected. Attr 23 = 1 (noise floor) is common during grid-on periods with nothing connected — this matches what the official app displays.
 - **Cloud connection is BLE-dependent.** The device only connects to the cloud broker while a phone is actively BLE-paired via the Cleanergy app. With no BLE connection, all publish requests return `num=0`. This was confirmed by the official app experiencing the same failure simultaneously. **This makes the WiFi/cloud path unsuitable for unattended Home Assistant integration.**
 - **Broker token appears long-lived.** The same token was observed across multiple separate capture sessions. It does not appear to be a short-lived session token.
 - **Client keepalive is `cmd=keep`**, not `cmd=is_online`. The app sends `cmd=keep\r\n` and receives `cmd=keep&timestamp=...&res=1`. The `cmd=is_online` command is a separate per-device check sent every ~5 seconds by the app.
