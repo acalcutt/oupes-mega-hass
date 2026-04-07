@@ -14,6 +14,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
 - [Architecture Overview](#architecture-overview)
 - [WiFi / Cloud API](#wifi--cloud-api)
   - [HTTP REST API](#http-rest-api)
+  - [Cloud Login API](#cloud-login-api)
   - [TCP Telemetry Channel (Port 8896)](#tcp-telemetry-channel-port-8896)
   - [Required Credentials](#required-credentials)
   - [Connection Sequence](#connection-sequence)
@@ -21,9 +22,13 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [Working Python Example](#working-python-example)
 - [Bluetooth LE (BLE)](#bluetooth-le-ble)
   - [GATT Profile](#gatt-profile)
+  - [BLE Advertising & Device Discovery](#ble-advertising--device-discovery)
+  - [Obtaining the `device_key`](#obtaining-the-device_key)
+  - [Connection Sequence](#connection-sequence-1)
+  - [Init Sequence](#init-sequence)
   - [Packet Format](#packet-format)
   - [BLE Output Control](#ble-output-control)
-  - [Working Python Example](#ble-python-example)
+  - [BLE Python Example](#ble-python-example)
 - [Telemetry Attribute Map](#telemetry-attribute-map)
 - [Notes & Unknowns](#notes--unknowns)
 
@@ -91,6 +96,81 @@ GET http://api.upspowerstation.top/api/app/device/info?device_id=<device_id>&tok
 ```
 
 > **Note:** The `online` field in the device info response is not reliable. The device may show `"online": 0` while actively maintaining its cloud TCP connection.
+
+---
+
+### Cloud Login API
+
+The cloud API requires authentication. The login endpoint uses **unencrypted HTTP** (matching the official Cleanergy app's own behaviour). Confirmed via PCAPdroid packet capture of the official app's login flow.
+
+#### Login
+
+```
+POST http://api.upspowerstation.top/api/app/user/login
+Content-Type: application/json
+
+{
+  "mail": "<your_cleanergy_email>",
+  "passwd": "<your_cleanergy_password>",
+  "lang": "en",
+  "platform": "android",
+  "systemVersion": 36
+}
+```
+
+**Headers** (observed from app):
+```
+versionname: 1.4.1
+lang: en
+package: com.cleanergy.app
+```
+
+**Response** (on success, `ret=1`):
+```json
+{
+  "ret": 1,
+  "desc": "ok",
+  "info": {
+    "token": "<session_token>",
+    "uid": 12345,
+    "mail": "...",
+    "mark": "{\"client_id\":\"<mqtt_client_id>\",\"password\":\"<mqtt_password>\",\"userName\":\"<mqtt_user>\"}"
+  }
+}
+```
+
+The `token` field is used for all subsequent API calls. The `mark` field contains MQTT broker credentials (used for the TCP 8896 cloud channel — not needed for BLE).
+
+#### Fetch device list
+
+```
+GET http://api.upspowerstation.top/api/app/device/list?token=<token>&platform=android&lang=en&systemVersion=36
+```
+
+**Response:**
+```json
+{
+  "ret": 1,
+  "desc": "ok",
+  "info": {
+    "bind": [
+      {
+        "device_id": "<device_id>",
+        "device_key": "<device_key>",
+        "device_product_id": "O44A5o",
+        "mac_address": "<mac_address>",
+        "name": "MEGA1",
+        "firmware_version": "1.2.0",
+        "online": 0
+      }
+    ]
+  }
+}
+```
+
+Each entry in the `bind` array contains the `device_key` needed for BLE init. The HA integration matches devices by `device_id` (extracted from BLE advertising) or `mac_address`.
+
+> **Security note:** The API uses plaintext HTTP. Credentials and tokens are transmitted unencrypted. This mirrors the official app's behaviour — OUPES does not provide an HTTPS endpoint. The HA integration uses credentials only once during setup and does not store them.
 
 ---
 
@@ -333,6 +413,103 @@ All telemetry is received via notifications on `00002b10`. Commands and the init
 
 ---
 
+### BLE Advertising & Device Discovery
+
+The device continuously broadcasts BLE advertisements that the Cleanergy app uses to discover and identify it. Confirmed from a btsnoop HCI capture (`bugreport19/btsnoop_hci.log`) of the official app's initial device setup flow.
+
+**Advertisement packets:** Two distinct AD payloads are broadcast (one ADV_SCAN_IND + one ADV_SCAN_RSP):
+
+| AD Structure | Type | Content |
+|---|---|---|
+| Flags | `0x01` | `0x06` (LE General Discoverable, BR/EDR Not Supported) |
+| Incomplete 16-bit UUIDs | `0x02` | `0xA201` |
+| Service Data (UUID=0xA201) | `0x16` | 2-byte header + `device_product_id` (6 bytes ASCII) + reversed MAC (6 bytes) |
+| Complete Local Name | `0x09` | `TT` |
+| Manufacturer Specific Data | `0xFF` | See structure below |
+
+**Manufacturer data structure** (25 bytes including AD type):
+
+```
+Byte  0:     Flag (0x00 or 0x01 — observed toggling; possibly pairing state)
+Bytes 1-10:  device_id (10 raw bytes → 20-char hex string)
+Bytes 11-16: device_product_id (6 ASCII bytes, e.g. "O44A5o")
+Bytes 17-22: MAC address in reverse byte order
+Bytes 23-24: Zero padding
+```
+
+> **Example:** Raw manufacturer payload (after company_id extraction):
+> `<device_id_bytes_2_10><product_id_hex><reversed_mac_hex>00`
+>
+> - device_id bytes `[XX] YY YY YY YY YY YY YY YY YY` → `"<your_20_char_device_id>"`
+>   (the first byte is consumed by the BLE company_id field as its high byte)
+> - product_id: `4f343441356f` → `"O44A5o"`
+> - reversed MAC: `XX XX XX XX XX XX` → `XX:XX:XX:XX:XX:XX`
+
+---
+
+### Obtaining the `device_key`
+
+The `device_key` is required for BLE init packet 6 and for the WiFi cloud protocol. **It is NOT present in the BLE advertising data.**
+
+The `device_key` is assigned by the cloud server and stored in the app's local MMKV storage (`/data/user/0/com.cleanergy.app/files/mmkv/http_mmkv`). The internal device config JSON (confirmed from Android bugreport logcat):
+
+```json
+{
+  "addtime": 0,
+  "batteryPower": 0,
+  "device_id": "<your_device_id>",
+  "device_key": "<your_device_key>",
+  "device_product_id": "O44A5o",
+  "firmware_version": "1.2.0",
+  "img": "http://static.upspowerstation.top/upload/image/...",
+  "mac_address": "<your_mac_address>",
+  "name": "MEGA1",
+  "online": 0,
+  "shellyId": -1,
+  "uid": 0,
+  "updatetime": 1775532103
+}
+```
+
+**Discovery flow (confirmed from btsnoop19 + logcat timeline):**
+
+```
+1. App performs BLE scan filtering for service UUID 0xA201
+2. TT device seen → app extracts device_id from manufacturer data
+3. App calls cloud API (api.upspowerstation.top) with device_id
+   → cloud returns device_key, product_id, firmware_version, product image, etc.
+4. App stores config locally in MMKV
+5. App connects BLE → GATT discovery → CCCD enable → handshake
+6. Device responds to handshake with: device_id + product_id + reversed MAC
+7. App sends init packets including device_key in packet 6
+8. Telemetry streaming begins
+```
+
+**The `device_id` in the advertising data provides a path to automate `device_key` retrieval** via the cloud API. The HA integration does this automatically during setup:
+
+#### Automated retrieval (recommended)
+
+The HA integration's config flow logs in to the OUPES cloud API with your Cleanergy account credentials, fetches the device list, and extracts the `device_key` for your device. Credentials are used once during setup and are **not** stored. See the [Cloud Login API](#cloud-login-api) section above for the full protocol.
+
+```
+1. User enters Cleanergy email + password in HA integration setup
+2. Integration POSTs to /api/app/user/login → receives session token
+3. Integration GETs /api/app/device/list?token=... → receives all bound devices
+4. Matches device by device_id (from BLE advertising) or MAC address
+5. Extracts 10-char hex device_key → stores in config entry
+6. Credentials are discarded — only the device_key is persisted
+```
+
+#### Manual retrieval (alternative)
+
+If you prefer not to use cloud login, the key can be obtained manually:
+
+1. **BLE packet capture:** Use nRF Connect, PCAPdroid, or btsnoop to capture the init sequence. Packet 6 (byte 0 = slot, byte 1 = `0x06`) contains the device_key at bytes 4–13 as ASCII hex.
+2. **Android bugreport:** Enable BT HCI snoop log, pair via the Cleanergy app, take a bugreport. The device config JSON appears in logcat with tag `TAG` and a `888...==` prefix.
+3. **MMKV extraction:** On a rooted device, read `/data/user/0/com.cleanergy.app/files/mmkv/http_mmkv` directly.
+
+---
+
 ### Connection Sequence
 
 The device requires a specific handshake before it will sustain a session and stream telemetry. Confirmed from HCI snoop captures (`btsnoop_hci.log`) of the Cleanergy app across multiple sessions.
@@ -383,7 +560,7 @@ APP_INIT_SEQUENCE = [
     bytes.fromhex("01030000000000000000000000000000000000a8"),
     bytes.fromhex("010400000000000000000000000000000000007e"),
     bytes.fromhex("0105000000000000000000000000000000000054"),
-    bytes.fromhex("01060000626432333662313639350000000000d7"),  # bytes 4-13 = device_key ASCII
+    bytes.fromhex("01060000000000000000000000000000000000XX"),  # bytes 4-13 = device_key ASCII (replace with yours)
     bytes.fromhex("0107000000000000000000000000000000000000"),
     bytes.fromhex("0108000000000000000000000000000000000081"),
     bytes.fromhex("01890000000000000000000000000000000000c0"),
@@ -394,7 +571,7 @@ APP_INIT_SEQUENCE = [
 KEEPALIVE = bytes.fromhex("0180030254010000000000000000000000000076")
 ```
 
-> **Device-specific token:** The example above contains `bd236b1695` as the device_key (encoded `6264 3233 3662 3136 3935`). Replace with your own device's `device_key` from the HTTP REST API or a PCAPdroid/btsnoop capture.
+> **Device-specific token:** Init packet 7 (index 6) must contain your device's `device_key` at bytes 4–13 as 10-character ASCII hex. The HA integration builds this packet automatically via `build_init_sequence(device_key)` in `protocol.py`. Replace the zeros in the example above with your key’s hex encoding. Obtain your key via the cloud login API (see below) or from a btsnoop/PCAPdroid capture.
 
 Subscribe to notifications on `00002b10` — the device pushes telemetry packets continuously after the handshake is complete.
 
@@ -536,7 +713,7 @@ APP_INIT_SEQUENCE = [
     bytes.fromhex("01030000000000000000000000000000000000a8"),
     bytes.fromhex("010400000000000000000000000000000000007e"),
     bytes.fromhex("0105000000000000000000000000000000000054"),
-    bytes.fromhex("01060000626432333662313639350000000000d7"),  # replace with your device_key
+    bytes.fromhex("01060000000000000000000000000000000000XX"),  # replace with your device_key
     bytes.fromhex("0107000000000000000000000000000000000000"),
     bytes.fromhex("0108000000000000000000000000000000000081"),
     bytes.fromhex("01890000000000000000000000000000000000c0"),
@@ -700,10 +877,16 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 - **btsnoop bugreport18 cross-validation (2026-04-06 12:57–12:58).** The official Cleanergy app was connected for ~44 seconds while screenshots were taken. Direct cross-referencing of the btsnoop ATT notification stream against the app UI confirms: attr 54 slot 2 = 100–104W while app showed "Backup Battery 2 OUTPUT 101W" ✅; attr 53 = 0 while app showed "INPUT 0W" for both batteries ✅; attr 5 (AC-only output) = 493–544W while app showed AC 517–535W ✅; attr 4 (total output) = 594–644W = AC (~520W) + B2 chain discharge (~101W) ✅; attr 21/22 (total/grid input) = 443–453W / 442–452W while app showed GRID 452W ✅; attr 30 = 5940 min = 4d 3h ✅; attr 32 = 956 = 95.6°F ✅; attr 79 = 82–83% matching app B2 SoC ✅; attr 80 = 822 = 82.2°F matching app B2 temp ✅.
 - **Attrs 81, 87, 107 (0x51, 0x57, 0x6b) — app requests but device never responds.** The official app sends a "subscribe to ext-battery attrs" write containing: 51, 53, 54, 78, 79, 80, 101, **81, 87, 107**. The last three were never observed in any device notification across 820K+ rows of CSV logging. They are likely Mega 2/3 or newer B2 firmware features not present in this hardware revision.
 - **App keepalive: writes attr 84 (AC control=ON) every 10 seconds** while AC output is active. This is a periodic heartbeat from the app to the device — the device probably requires repeated confirmation to keep AC on, or the app simply re-asserts desired state on a timer. Our HA integration does not need to replicate this; the device firmware maintains state between writes.
-- **App identity / `device_key` write on connect — likely per-device.** On each new BLE connection the app writes a 10-character hex token (`bd236b1695` captured from one unit) to the write characteristic before subscribing to notifications. This is byte-for-byte identical to the `device_key` used in the WiFi/cloud protocol and is embedded at bytes 4–13 of init packet 6. **This value appears to be per-device**: a second user's Mega 1 did not connect when the example key was used verbatim, confirming it is not universal across all units. Users must supply their own key (captured via btsnoop or PCAPdroid on the Cleanergy app — see Notes for the decode procedure) for the integration to work on their specific unit. The HA integration now accepts the key as an optional setup field and falls back to the example value only if no key is provided.
+- **App identity / `device_key` write on connect — per-device.** On each new BLE connection the app writes a 10-character hex token to the write characteristic before subscribing to notifications. This is byte-for-byte identical to the `device_key` used in the WiFi/cloud protocol and is embedded at bytes 4–13 of init packet 6. **This value is per-device**: a second user's Mega 1 did not connect when a different unit's key was used, confirming it is not universal across all units. Users must supply their own key (fetched automatically via cloud login during HA integration setup, or captured manually via btsnoop/PCAPdroid). The HA integration requires a valid device_key — setup will fail without one.
 - **No standalone battery voltage attribute exists — confirmed exhaustively.** A 23-hour BLE logging session (2026-04-05 23:42 – 2026-04-06 22:56, 1,254,494 decoded attr rows, 357,752 raw packets) covering every major operating state — grid float-charge at 100% SoC, bulk charge from 0%→100%, full discharge from 100%→0%, solar-only operation, B2 hot-plug disconnect/reconnect — was scanned for any undiscovered attributes or voltage-like value ranges. **Results:** (1) Zero unknown TLV attribute numbers were found — every byte in every raw packet decodes to an already-documented attr; (2) No attribute other than attr 78 carries values in any plausible voltage range (checked mV, cV, dV, and V scalings for the entire LiFePO4 44–60V window); (3) Attrs 2 and 9 remain always-zero across all 60,427 main-unit poll cycles. The firmware simply does not expose a reliable battery voltage metric. The only voltage data available is attr 78 on slot 2 during active charging (see below).
 - **Attr 78 voltage is charging-only and slot-2-only — comprehensively confirmed.** In the 23-hour session: slot 2 produced 1,242 voltage readings (44.324–60.050 V); slot 1 produced **zero** voltage readings across 29,325 observations. Voltage readings appeared in three windows: (1) the initial trickle/float state at session start (23:42–23:44, ~2 min), (2) a sustained float-charge period (03:44–09:31, ~6 hours of oscillation 44–57V at SoC=100%, grid ~28–43W), and (3) a brief fast-charge burst during B2 reconnection (12:23–12:24, ~30s, locked at 60.050V = CV clamp limit). 1,228 of 1,242 readings were at SoC=100% (float); only 13 were at SoC=95% (the fast-charge CV burst). During the entire 8.5-hour discharge (100%→0% main SoC, 100%→0% ext SoC), attr 78 reported only runtime estimates — no voltage readings were emitted at any point during discharge. **A persistent voltage entity is not feasible with the current firmware telemetry.**
 - **Fast-charge CV voltage burst at B2 reconnect.** When the B2 expansion batteries were physically reconnected (12:23:39, SoC jumped from 0→79% as the slot came back online), slot 2 immediately began reporting 60.050V — the constant-voltage (CV) limit of the LiFePO4 charger. This reading persisted for ~30 seconds at grid power 446–662W, then switched back to runtime=5940 as the BMS transitioned to bulk CC mode. This is the only time voltage appeared during non-100% SoC in this entire 23-hour dataset.
 - **Attr 51 hot-plug transitions captured.** The expansion battery count transitioned through multiple states: 2→0 at 11:36:19 (physical disconnect of both B2s), 0→1 at 12:11:01 (first B2 reconnected), 1→0 at 12:23:02 (brief dropout), 0→2 at 12:23:40 (both B2s fully reconnected). The final zeroed-packet pattern confirmed at each disconnect (attr 79=0, attr 80=320=32.0°F sentinel).
 - **Full 0% SoC discharge captured on both main unit and ext batteries.** Main unit SoC reached true 0% at 22:33:46 while actively outputting ~500W at attr 1=7 (all outputs on). Ext battery SoC (slot 2) simultaneously dropped from 24%→0%. Grid was reconnected at the same moment (418W). Attr 78 runtime for both slots was 4–5 minutes at the moment of 0%. Temperature peaked at 96.3°F (raw 963) during the charging phase, dropped to 85.5°F (raw 855) overnight at lower ambient.
 - **Slot 1 mystery values (attr 78 range 6001–43999):** 6,633 readings across the float-charge period. The dominant value is 27,499 appearing in ~73% of readings; occasional excursions span the full 6,097–40,088 range. No scaling maps these to a plausible voltage. The slot 2 mystery count was only 26 (vs 6,633 for slot 1), reinforcing that the mystery range is a per-module BMS measurement asymmetrically reported across slots — likely related to float-charge balancing current or cell-level data that only one BMS controller exposes.
+- **`device_id` is embedded in BLE advertising data — confirmed from btsnoop19.** The manufacturer-specific data (AD type 0xFF) in the TT device's advertisement contains the full 20-char `device_id` at bytes 1–10 of the raw manufacturer payload, followed by the 6-byte ASCII `device_product_id` and the reversed MAC address. The first byte of the manufacturer data is a flag (observed as 0x00 or 0x01, possibly toggling pairing state). The BLE company_id (0x7501 in LE) is not a real Bluetooth SIG assignment — its high byte (`0x75`) is actually the first byte of `device_id`. **The `device_id` in ADV data could be used to query the cloud API for the `device_key`, potentially automating the setup process.**
+- **`device_key` is NOT in advertising data.** Exhaustive search of all AD structures in 691 advertising reports from the TT device confirmed that the 10-char device_key does not appear anywhere in the advertisement payload. The key is obtained from the cloud API (`api.upspowerstation.top`) using the `device_id` from the advertising data, and stored locally in the app's MMKV storage.
+- **`device_product_id` (`O44A5o`) appears in multiple contexts:** BLE service data (UUID=0xA201), BLE manufacturer data, BLE handshake response, and the cloud API JSON config. This 6-byte ASCII string is a per-product-model identifier (the same across units of the same model). It is distinct from the `device_key` (which is per-unit) and the `device_id` (which is per-unit).
+- **BLE handshake response decoded.** After the app sends the initial 0x80/0x00 handshake packet, the device responds with two notification packets containing: (1) the full `device_id` as raw bytes, and (2) the reversed MAC address + `device_product_id` in ASCII. The app uses these to confirm it connected to the expected device before proceeding with the init sequence.
+- **Cleanergy app uses two BLE slots:** The btsnoop19 capture shows the app initializing both slot 3 (first) and slot 1 (second). Slot 3 init packets carry the `device_key` plus an MQTT `client_id` string (29 chars spread across packets 6–8). Slot 1 init packets carry only the `device_key` (no MQTT data — zeros in packets 7–8). The slot 3 handshake is sent first, then slot 1. The HA integration's working init sequence uses only slot 1 — the slot 3 MQTT setup is only needed for cloud push functionality.
+- **Cloud product catalog observed in logcat.** The Cleanergy app downloads a full product model catalog from the cloud on startup, containing SKU mappings and product images for all OUPES models: UPS-800, UPS-1200, UPS-1800, S2-V2, HP6000_V2, PB300, LP700, LP350, S024 Lite, S1 Lite, HP2500 (MEGA2PRO), Guardian 6000, DC 800, MEGA 5, MEGA2, MEGA3, MEGA1, Exodus 1200/1500/2400, shelly plug, shelly meter. This confirms the product line scope and suggests the protocol may be shared across the entire range.

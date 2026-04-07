@@ -6,6 +6,7 @@ DOMAIN = "oupes_mega"
 # Config entry data keys
 CONF_ADDRESS = "address"
 CONF_NAME = "name"
+CONF_DEVICE_ID = "device_id"
 
 # How often to reconnect and pull a fresh telemetry snapshot
 UPDATE_INTERVAL = timedelta(seconds=30)
@@ -23,7 +24,7 @@ MAX_ATTEMPTS = 5
 
 # Config entry data key — the per-device 10-character hex init token.
 # Found at bytes 4–13 of BLE init packet 6 (from a btsnoop/PCAPdroid capture).
-# Likely per-device; the example value "bd236b1695" is from a single known unit.
+# Per-device; obtained from the cloud API (auto) or a packet capture (manual).
 CONF_DEVICE_KEY = "device_key"
 
 # Config entry options key — whether to hold the BLE connection open permanently

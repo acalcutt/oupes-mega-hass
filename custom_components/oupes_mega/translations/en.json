@@ -4,13 +4,17 @@
       "init": {
         "title": "OUPES Mega Options",
         "data": {
+          "cloud_email": "Cleanergy Cloud Email",
+          "cloud_password": "Cleanergy Cloud Password",
           "device_key": "Device Key",
           "continuous_connection": "Continuous BLE connection",
           "debug_attr_logging": "Debug: log all attribute values to CSV",
           "debug_raw_logging": "Debug: log raw BLE packets to CSV"
         },
         "data_description": {
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Found at bytes 4\u201313 of init packet 6 in a btsnoop/PCAPdroid capture of the Cleanergy app. Leave blank to use the built-in fallback key.",
+          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
+          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
+          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Auto-populated from the OUPES cloud API when possible. You can also enter or override it manually from a btsnoop/PCAPdroid capture of the Cleanergy app.",
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling every 30 seconds. Captures infrequent sensor updates (e.g. battery voltage) but blocks the official app from connecting at the same time.",
           "debug_attr_logging": "Write all received attribute values (including unknown ones and attr-78 mystery values) to oupes_mega_<addr>_attrs.csv in your HA config folder. Emits warnings in the HA log for unrecognised attr-78 values.",
           "debug_raw_logging": "Write every raw BLE notification payload as hex to oupes_mega_<addr>_raw.csv in your HA config folder. Useful for offline analysis with the debug_info scripts."
@@ -22,25 +26,33 @@
     "step": {
       "user": {
         "title": "OUPES Mega Power Station",
-        "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.",
+        "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.\n\nTo auto-fetch the device key, enter your Cleanergy cloud credentials. Credentials are used once and are **not** stored.",
         "data": {
           "address": "Bluetooth MAC Address",
           "name": "Device Name",
+          "cloud_email": "Cleanergy Cloud Email (optional)",
+          "cloud_password": "Cleanergy Cloud Password (optional)",
           "device_key": "Device Key (optional)"
         },
         "data_description": {
           "address": "Example: 8C:D0:B2:A7:EC:AF",
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Found at bytes 4–13 of init packet 6 in a btsnoop/PCAPdroid capture of the Cleanergy app. Leave blank to use the built-in example key, which may not work on your unit."
+          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
+          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
+          "device_key": "10-character hex key unique to your device. Leave blank and provide cloud credentials to auto-fetch, or enter manually from a btsnoop/PCAPdroid capture."
         }
       },
       "bluetooth_confirm": {
         "title": "OUPES Mega Power Station",
-        "description": "Found **{name}** ({address}) nearby. Enter your device key to add it to Home Assistant.",
+        "description": "Found **{name}** ({address}) nearby.\n\nDevice ID: `{device_id}`\n\nTo auto-fetch the device key, enter your Cleanergy cloud credentials below. Credentials are used once and are **not** stored.",
         "data": {
+          "cloud_email": "Cleanergy Cloud Email (optional)",
+          "cloud_password": "Cleanergy Cloud Password (optional)",
           "device_key": "Device Key (optional)"
         },
         "data_description": {
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Found in a btsnoop/PCAPdroid capture of the Cleanergy app. Leave blank to use the built-in example key, which may not work on your unit."
+          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
+          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
+          "device_key": "10-character hex key unique to your device. Leave blank and provide cloud credentials to auto-fetch, or enter manually from a btsnoop/PCAPdroid capture."
         }
       }
     },
@@ -49,7 +61,9 @@
     },
     "error": {
       "invalid_address": "Invalid Bluetooth MAC address format. Use XX:XX:XX:XX:XX:XX.",
-      "invalid_device_key": "Device key must be exactly 10 hexadecimal characters (e.g. bd236b1695)."
+      "invalid_device_key": "Device key must be exactly 10 hexadecimal characters (e.g. bd236b1695).",
+      "cloud_login_failed": "Cloud login failed. Check your Cleanergy email and password, or enter the device key manually.",
+      "no_device_key": "A device key is required. Enter your Cleanergy cloud email and password to auto-fetch it, or provide the 10-character hex key manually."
     }
   }
 }

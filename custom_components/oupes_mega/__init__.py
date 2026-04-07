@@ -27,8 +27,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_key: str = (
         entry.options.get(CONF_DEVICE_KEY)
         or entry.data.get(CONF_DEVICE_KEY)
-        or "bd236b1695"
+        or ""
     )
+    if not device_key:
+        raise ConfigEntryNotReady(
+            f"No device_key configured for {name} ({address}). "
+            "Open the integration options and enter your Cleanergy cloud "
+            "email/password to auto-fetch the correct key, or enter it manually."
+        )
     coordinator = OUPESMegaCoordinator(
         hass, address, name,
         device_key=device_key,
