@@ -13,7 +13,7 @@ toggle switches with no cloud dependency.
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES Mega 1 | Power on, BLE enabled — press the BLE/WiFi button on the unit to enable it; the setting persists after that |
+| OUPES Mega 1 | Power on, BLE enabled — press the IoT button on the unit to enable it (indicator flashes rapidly); the setting persists after that. Hold for 5 s to factory-reset the BLE pairing. |
 
 ### USB Bluetooth adapter for HA
 
@@ -183,7 +183,7 @@ Restart HA after changing.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Entities always Unavailable | Device out of range or off | Check device is on and in range |
-| Entities always Unavailable | BLE disabled on unit | Press the BLE/WiFi button on the device to re-enable it |
+| Entities always Unavailable | BLE disabled on unit | Press the IoT button on the device to re-enable it (indicator flashes rapidly) |
 | "BLE device not found" in logs | HA hasn't scanned recently | Check Bluetooth integration is running |
 | Entities always Unavailable | App open on phone | The device only allows one BLE connection at a time — close the Cleanergy app and wait for the next poll |
 | "Cold-probe drop" repeated | BLE interference or device busy | Usually self-resolves on next poll |
@@ -202,7 +202,26 @@ logger:
 
 ## Finding Your Device Key
 
-The integration setup asks for a **device key** (`device_key`) — a 10-character string the Cleanergy app assigns to your device when it first pairs with it. The same key is shared across all devices paired from the same phone.
+The integration setup asks for a **device key** (`device_key`) — a 10-character
+hex string the Cleanergy app derives from your account and programs into the
+device when it first pairs.
+
+### How the key is derived
+
+The key is the first 10 characters of the MD5 hash of your numeric cloud user ID:
+
+```python
+import hashlib
+device_key = hashlib.md5(str(user_uid).encode()).hexdigest()[:10]
+```
+
+Your numeric `user_uid` is returned by the cloud login API. If you know it,
+you can compute the key without capturing any traffic. The Integration setup
+(Method 2 below) does this for you automatically.
+
+> **Note:** If the Cleanergy app is run before the login has completed, it falls
+> back to uid `"0"` (giving key `cfcd208495`). This can happen if the app is
+> opened immediately after a cache clear before the login HTTP response arrives.
 
 ### Method 1 — ADB logcat (easiest, no root required)
 
@@ -255,3 +274,37 @@ $devices = Invoke-RestMethod -Uri "http://api.upspowerstation.top/api/app/device
            -Headers @{Authorization = "Bearer $token"}
 $devices.data | Select-Object name, mac_address, device_id, device_key | Format-Table -AutoSize
 ```
+
+### Re-keying the device (experimental — not yet confirmed working)
+
+> ⚠️ **This method is not yet confirmed working.** The `0x03` BLE claim
+> sequence was observed in app captures but reliably triggering it from a
+> third-party script has proven difficult. Use at your own risk.
+
+If you want to set a known, predictable key on the device — for example after a
+factory reset or when taking ownership from another account — use
+`set_device_key.py` from this repo.
+
+**Hardware reset first (required):** Press and hold the IoT button for **5 seconds**
+until the indicator light changes. This clears the stored pairing key and puts
+the device into pairing mode (indicator flashes rapidly). You must do this before
+the script can program a new key.
+
+```powershell
+cd oupes-mega-hass
+python set_device_key.py <MAC> --key <new_key>
+```
+
+If the device already has a known key and you want to re-key without the button
+hold (software factory reset path — also unverified):
+```powershell
+python set_device_key.py <MAC> --current-key <current_key> --key <new_key>
+```
+
+The new key must be exactly 10 lowercase hex characters. If `--key` is omitted
+a random valid hex key is generated and printed at startup.
+
+> **Note from manufacturer docs:** "One power station cannot be controlled by
+> multiple phones at the same time. Android devices need to unpair the first
+> device before pairing a second one." The hardware button hold resets this
+> pairing state on the device side.
