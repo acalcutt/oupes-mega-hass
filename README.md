@@ -197,3 +197,61 @@ logger:
   logs:
     custom_components.oupes_mega: debug
 ```
+
+---
+
+## Finding Your Device Key
+
+The integration setup asks for a **device key** (`device_key`) — a 10-character string the Cleanergy app assigns to your device when it first pairs with it. The same key is shared across all devices paired from the same phone.
+
+### Method 1 — ADB logcat (easiest, no root required)
+
+Requires USB debugging enabled on your Android phone ([how to enable](https://developer.android.com/studio/debug/dev-options)).
+
+1. Connect your phone to your PC via USB.
+2. Open a terminal and run:
+
+   **Windows:**
+   ```
+   adb logcat | findstr "8888888888888888888"
+   ```
+   **Mac / Linux:**
+   ```
+   adb logcat | grep "8888888888888888888"
+   ```
+
+3. Open the **Cleanergy** app on your phone.
+4. Within a few seconds the terminal will print a JSON line like:
+
+   ```json
+   {"device_id":"756173148cd0b2a8e142","device_key":"bd236b1695","mac_address":"8C:D0:B2:A8:E1:44","name":"MEGA1",...}
+   ```
+
+5. Copy the value of `device_key`. That's it.
+
+> **Note:** `device_id` is not a per-unit unique ID — it encodes your device's
+> MAC address as a suffix. The truly unique identifier is the MAC address.
+
+### Method 2 — Cloud login (built into the integration setup)
+
+During initial setup the integration can log in to the Cleanergy cloud API
+(`api.upspowerstation.top`) with your account credentials to fetch the
+`device_key` automatically. Your credentials are not stored after setup — only
+the retrieved key is saved.
+
+Your device must already be registered in the Cleanergy app for it to appear
+in the device list.
+
+### Method 3 — PowerShell (no phone needed)
+
+```powershell
+# Replace YOUR_EMAIL and YOUR_PASSWORD with your Cleanergy app credentials
+$body = '{"account":"YOUR_EMAIL","password":"YOUR_PASSWORD","client_type":2}'
+$r = Invoke-RestMethod -Uri "http://api.upspowerstation.top/api/app/user/login" `
+     -Method POST -Body $body -ContentType "application/json"
+$token = $r.data.token
+
+$devices = Invoke-RestMethod -Uri "http://api.upspowerstation.top/api/app/device/list" `
+           -Headers @{Authorization = "Bearer $token"}
+$devices.data | Select-Object name, mac_address, device_id, device_key | Format-Table -AutoSize
+```
