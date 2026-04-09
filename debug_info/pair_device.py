@@ -14,12 +14,15 @@ The app's pairing cycle (on a single connection):
   7. Keepalives on slot 1
   8. If no success, disconnect, reconnect, repeat from step 1
 
-The CLAIM includes the device_key + an MQTT token spanning packets 6-8.
+The CLAIM includes the device_key + a WiFi credential blob spanning packets 6-8.
+The 30-byte blob is: PSK (22 chars, null-padded) + SSID (8 chars, null-padded).
 For BLE-only (no cloud), we use a dummy token.
 
 Usage:
   1. Hold IoT button 5 seconds (rapid flash = factory reset)
   2. python pair_device.py 8C:D0:B2:A8:E1:44 --key 4c282b63af
+  3. With WiFi provisioning:
+     python pair_device.py 8C:D0:B2:A8:E1:44 --key 4c282b63af --ssid MyWiFi --psk MyPassword123
 """
 
 import asyncio
@@ -36,10 +39,15 @@ NOTIFY_CHAR = "00002b10-0000-1000-8000-00805f9b34fb"
 
 KEEPALIVE = bytes.fromhex("0180030254010000000000000000000000000076")
 
-# Dummy MQTT token (30 chars, alphanumeric, same format as the app's real ones).
-# The device stores this for cloud use; for BLE-only it's irrelevant,
-# but the claim packet format expects it.
+# Dummy WiFi credential blob (30 bytes).  The device stores this for cloud use;
+# for BLE-only it's irrelevant, but the claim packet format expects 30 bytes.
+# Layout: PSK (22 chars, null-padded) + SSID (8 chars, null-padded).
 DUMMY_TOKEN = b"HALOCAL000000000000000000000000"[:30]
+
+
+def _build_wifi_blob(ssid: str, psk: str) -> bytes:
+    """Build the 30-byte WiFi credential blob: PSK(22) + SSID(8)."""
+    return psk.encode("ascii").ljust(22, b"\x00")[:22] + ssid.encode("ascii").ljust(8, b"\x00")[:8]
 
 
 def _crc8(data: bytes) -> int:
@@ -129,7 +137,7 @@ async def scan(mac: str, timeout: float = 15.0):
     return dev
 
 
-async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
+async def pairing_cycle(mac: str, key: str, attempt: int, wifi_blob: bytes = DUMMY_TOKEN) -> bool:
     """One full pairing cycle matching the app's btsnoop flow.
     Returns True if device transitioned to configured (status=0x00)."""
 
@@ -223,7 +231,7 @@ async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
                     break
 
             # ── Step 5: 0x03 CLAIM data ──
-            claim_seq = build_claim(key)
+            claim_seq = build_claim(key, token=wifi_blob)
             print(f"\n  >> 0x03 CLAIM data ({len(claim_seq)} packets)...")
             for i, pkt in enumerate(claim_seq):
                 print(f"     [{i:2d}] {pkt.hex()}")
@@ -276,12 +284,14 @@ async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
     return False
 
 
-async def main(mac: str, key: str, max_cycles: int = 6):
+async def main(mac: str, key: str, max_cycles: int = 6, wifi_blob: bytes = DUMMY_TOKEN):
     print("=" * 60)
     print("OUPES Mega — BLE Pairing (btsnoop-matched flow)")
     print("=" * 60)
     print(f"  MAC : {mac}")
     print(f"  Key : {key}")
+    if wifi_blob != DUMMY_TOKEN:
+        print(f"  WiFi: SSID + PSK will be provisioned")
     print()
     print("Make sure device is in pairing mode (5s button hold).")
     print("This may take 2-3 minutes with multiple reconnects,")
@@ -290,7 +300,7 @@ async def main(mac: str, key: str, max_cycles: int = 6):
     input("Press Enter when ready...")
 
     for cycle in range(1, max_cycles + 1):
-        success = await pairing_cycle(mac, key, cycle)
+        success = await pairing_cycle(mac, key, cycle, wifi_blob=wifi_blob)
         if success:
             print(f"\n{'='*60}")
             print(f"  SUCCESS! Device paired with key: {key}")
@@ -323,12 +333,32 @@ if __name__ == "__main__":
                         help="10-char hex key to set (e.g. 4c282b63af)")
     parser.add_argument("--cycles", type=int, default=6,
                         help="Max pairing cycles (default: 6)")
+    parser.add_argument("--ssid",
+                        help="WiFi SSID to provision (max 8 chars)")
+    parser.add_argument("--psk",
+                        help="WiFi PSK/password to provision (max 22 chars)")
     args = parser.parse_args()
+
+    # Validate WiFi args
+    if (args.ssid is None) != (args.psk is None):
+        print("ERROR: --ssid and --psk must be used together")
+        sys.exit(1)
+
+    if args.ssid is not None:
+        if len(args.ssid) > 8:
+            print(f"ERROR: --ssid max 8 chars, got {len(args.ssid)}")
+            sys.exit(1)
+        if len(args.psk) > 22:
+            print(f"ERROR: --psk max 22 chars, got {len(args.psk)}")
+            sys.exit(1)
+        wifi_blob = _build_wifi_blob(args.ssid, args.psk)
+    else:
+        wifi_blob = DUMMY_TOKEN
 
     k = args.key.lower()
     if len(k) != 10 or not all(c in "0123456789abcdef" for c in k):
         print(f"ERROR: --key must be 10 hex chars, got: {args.key!r}")
         sys.exit(1)
 
-    result = asyncio.run(main(args.mac, k, args.cycles))
+    result = asyncio.run(main(args.mac, k, args.cycles, wifi_blob=wifi_blob))
     sys.exit(0 if result else 1)

@@ -31,6 +31,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [BLE Output Control](#ble-output-control)
   - [BLE Python Example](#ble-python-example)
 - [Telemetry Attribute Map](#telemetry-attribute-map)
+- [WiFi Local Port Investigation](#wifi-local-port-investigation)
 - [Notes & Unknowns](#notes--unknowns)
 
 ---
@@ -629,20 +630,32 @@ always double-sends AUTH — this mirrors that behaviour.
 
 #### Phase 4 — CLAIM (10 packets, slot `0x03`)
 
-The CLAIM sequence writes the device key and a 30-byte MQTT token. The 40-byte
-blob (`key[10] + mqtt_token[30]`) is spread across packets 6, 7, and 8:
+The CLAIM sequence writes the device key and WiFi credentials. The 40-byte
+blob (`key[10] + wifi_psk + wifi_ssid`) is spread across packets 6, 7, and 8.
+The Cleanergy app sends the user's real WiFi SSID and PSK so the device can
+connect to the cloud broker. For BLE-only operation, a 30-byte dummy string
+is used instead.
 
 | Pkt | Byte[1] | Content |
 |-----|---------|---------|
 | 0 | `0x00` | Header: `0x99` flag, bytes 3–18 = `0x02` padding |
 | 1 | `0x01` | All `0x02` padding |
 | 2–5 | `0x02`–`0x05` | Zero payload |
-| 6 | `0x06` | `[4:14]` = key, `[14:19]` = token bytes 0–4 |
-| 7 | `0x07` | `[2:19]` = token bytes 5–21 |
-| 8 | `0x08` | `[2:10]` = token bytes 22–29, rest zeros |
+| 6 | `0x06` | `[4:14]` = key, `[14:19]` = wifi blob bytes 0–4 |
+| 7 | `0x07` | `[2:19]` = wifi blob bytes 5–21 (PSK continuation) |
+| 8 | `0x08` | `[2:10]` = wifi blob bytes 22–29 (SSID), rest zeros |
 | 9 | `0x89` | Terminator (high bit set) |
 
-For local-only operation (no cloud push), use a dummy MQTT token:
+**WiFi credential layout** (confirmed from btsnoop captures of real Cleanergy app pairing):
+
+The 30-byte wifi blob = `PSK_prefix(5) + PSK_body(17) + SSID(8)`, split as:
+- Packet 6 bytes `[14:19]`: first 5 bytes of WiFi PSK
+- Packet 7 bytes `[2:19]`: next 17 bytes of WiFi PSK (total PSK = 22 chars)
+- Packet 8 bytes `[2:10]`: WiFi SSID (up to 8 chars, null-padded)
+
+Example from a real capture: PSK = `siimPDqjxJCRBelB2cf10I[` (22 chars), SSID = `Lo43Lyvk` (8 chars).
+
+For BLE-only / local-only operation (no cloud push), use a dummy string:
 `HALOCAL000000000000000000000000` (30 ASCII bytes).
 
 Packets are sent with ~50 ms inter-packet delay.
@@ -916,6 +929,61 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 | AC inverter protection active | boolean | attr 105 ✅ |
 
 > The app also shows "Grid" and "Solar" as separate input sources on the flow diagram screen, suggesting there may be distinct attrs for each not yet fully identified.
+
+---
+
+## WiFi Local Port Investigation
+
+The OUPES Mega 1 has an ESP32 with WiFi capability. During BLE pairing via the
+Cleanergy app, real WiFi credentials (SSID + PSK) are transmitted in the CLAIM
+sequence (see [Phase 4](#phase-4--claim-10-packets-slot-0x03) above). The device
+then connects to the Alibaba Cloud broker at `47.252.10.9:8896` and maintains a
+`cmd=ping` / `cmd=pong` heartbeat. However, this cloud connection is **only active
+while a phone is BLE-paired** — it drops immediately when BLE disconnects.
+
+### What we know from capture analysis
+
+| Source | Finding |
+|--------|---------|
+| Router pcap (`192.168.1.209`) | Device connects outbound to `47.252.10.9:8896` (TCP). Only `cmd=ping` / `cmd=pong` heartbeats observed — no telemetry data in the capture. |
+| btsnoop (17 bugreports) | CLAIM packets 6/7/8 carry real WiFi PSK + SSID. **Same credentials in every pairing session** — the app re-sends the phone's current WiFi credentials each time. |
+| UDP broadcast (app) | App sends `{"cmd":0,"pv":0,"sn":"..."}` to `255.255.255.255:6095`. Device does **not** respond. One-way only. |
+| Cloud TCP 8896 | Requires active BLE session. Device publishes `num=0` (no subscribers) when no phone is BLE-connected. Not viable for unattended HA use. |
+
+### Open question: local API?
+
+It's unknown whether the ESP32 firmware exposes any **local** TCP or UDP services
+(HTTP, MQTT, telnet, custom protocol) while WiFi-connected. If it does, that
+would enable a cloud-free WiFi communication path — potentially faster and more
+reliable than BLE for Home Assistant.
+
+### Port scan script
+
+[`scan_wifi_ports.py`](scan_wifi_ports.py) scans the device's local IP for open
+TCP ports (and optionally UDP). Run it while the device is WiFi-connected:
+
+```bash
+# Scan common ports (1-1024 + known IoT ports)
+python debug_info/scan_wifi_ports.py 192.168.1.209
+
+# Full 65535-port scan (takes a few minutes)
+python debug_info/scan_wifi_ports.py 192.168.1.209 --ports 1-65535 --timeout 0.3
+
+# Include UDP scan
+python debug_info/scan_wifi_ports.py 192.168.1.209 --udp
+```
+
+**Important:** The device must be WiFi-connected when you run the scan. Pair via
+the Cleanergy app first (or use `pair_device.py` with real WiFi credentials in
+the CLAIM sequence), then run the scan immediately while the BLE session is active.
+
+### Provisioning WiFi via `pair_device.py`
+
+The current `pair_device.py` sends `HALOCAL000000000000000000000000` as the WiFi
+blob, which the device accepts but likely doesn't connect to any WiFi network with.
+To provision real WiFi credentials during pairing, the CLAIM packets 6/7/8 would
+need to carry the actual SSID and PSK. This is a future enhancement — the BLE-only
+path works without WiFi provisioning.
 
 ---
 
