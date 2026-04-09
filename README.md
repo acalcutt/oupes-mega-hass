@@ -47,26 +47,57 @@ Not yet published to HACS. Use Option A for now.
 
 ## Adding the Integration
 
-### Automatic discovery (recommended)
+### Step 1 — Device discovery
 
-If your OUPES Mega is powered on and in Bluetooth range when HA starts (or at
-any time after adding the adapter), HA will notice the `TT` BLE advertisement
-and show a **"New device discovered"** notification.
+**Automatic (recommended):** If your OUPES Mega is powered on and in Bluetooth
+range, HA auto-discovers the `TT` BLE advertisement and shows a **"New device
+discovered"** notification. Click it, confirm the device name and MAC, and
+click **Submit**.
 
-1. Click the notification (or go to **Settings → Devices & Services → + Add Integration → OUPES Mega**).
-2. A confirmation dialog shows the device name and MAC address.
-3. Click **Submit** — done.
+**Manual:** Go to **Settings → Devices & Services → + Add Integration →
+OUPES Mega** and enter the Bluetooth MAC address (e.g., `8C:D0:B2:A7:EC:AF`).
 
-### Manual setup
+> **Tip:** The MAC address is printed on a label on the bottom of the unit,
+> or you can find it by running `python debug_info/scan_ble.py` from this repo.
 
-If auto-discovery doesn't trigger (e.g., device was off at startup):
+### Step 2 — Provide the device key
 
-1. **Settings → Devices & Services → + Add Integration → OUPES Mega**
-2. Enter the Bluetooth MAC address (e.g., `8C:D0:B2:A7:EC:AF`) and a friendly name.
-3. Click **Submit**.
+After discovery, the integration asks you to choose how to provide the
+**device key** — a 10-character hex string the device uses to authenticate BLE
+sessions. You'll see three options:
 
-> **Tip:** The MAC address is printed on a label on the bottom of the unit,  
-> or you can find it by running `python scan_ble.py` from this repo.
+#### Option A — Create New Key (BLE pairing)
+
+Pairs the device with a new key directly over BLE, with no cloud or app
+dependency. This replicates the Cleanergy app's pairing protocol.
+
+1. **Factory-reset the device first:** Press and hold the IoT button for
+   **5 seconds** until the indicator light changes to rapid flashing. This
+   clears the stored pairing key and puts the device into pairing mode.
+2. A random 10-hex-character key is pre-filled (you can change it).
+3. Click **Submit** — a progress spinner appears while pairing runs (~20 s).
+4. When pairing completes, the integration is ready.
+
+> This is the best option if you're setting up from scratch, taking ownership
+> of a used unit, or don't want to use the Cleanergy cloud at all.
+
+#### Option B — Enter Existing Key
+
+Enter a device key you already know — for example, from a previous setup, a
+btsnoop capture, or `adb logcat` output from the Cleanergy app.
+
+The key must be exactly 10 lowercase hex characters (e.g., `bd236b1695`).
+
+#### Option C — Fetch from Cleanergy Cloud
+
+Log in with your Cleanergy account credentials. The integration calls the
+OUPES cloud API (`api.upspowerstation.top`) to fetch the device key
+automatically. Your credentials are used once and **not stored** — only the
+retrieved key is saved.
+
+> **Note:** The OUPES cloud API uses unencrypted HTTP (matching the official
+> app's own behaviour). Your device must already be registered in the
+> Cleanergy app for it to appear in the device list.
 
 ---
 
@@ -137,17 +168,16 @@ triggers quickly.
 Each update cycle (default: every 1 minute):
 
 1. HA's Bluetooth scanner finds the `TT` advertisement and provides a `BLEDevice`.
-   If the device hasn't advertised recently, a direct MAC address connection is
-   attempted as a fallback so a single missed scan window doesn't cause a failure.
-2. The coordinator connects via BleakClient.
+2. The coordinator connects via `bleak_retry_connector.establish_connection()`.
 3. Waits ~1.8 s (matching Android GATT discovery timing the device expects).
-4. Subscribes to the notify characteristic and sends an 11-packet init sequence.
+4. Subscribes to the notify characteristic and sends an 11-packet init sequence
+   (packet 7 carries the device key).
 5. Collects BLE notification packets for ~15 seconds (with keepalive writes every
    10 s to prevent the device from dropping the connection).
 6. Disconnects and updates all sensor entities with the collected data.
 
 If the device makes a "cold-probe" drop (disconnects in <400 ms — normal BLE
-behaviour) the coordinator retries up to 5 times automatically.
+behaviour) the coordinator retries automatically.
 
 If a poll fails entirely, entities **retain their last known values** for up to
 10 minutes before going unavailable. This prevents flickering from transient
@@ -200,71 +230,72 @@ logger:
 
 ---
 
-## Finding Your Device Key
+## Understanding the Device Key
 
-The integration setup asks for a **device key** (`device_key`) — a 10-character
-hex string the Cleanergy app derives from your account and programs into the
-device when it first pairs.
+The **device key** (`device_key`) is a 10-character hex string that
+authenticates BLE sessions. The device and the client must agree on the same
+key for telemetry to flow.
 
-### How the key is derived
+### How the key is derived (Cleanergy app convention)
 
-The key is the first 10 characters of the MD5 hash of your numeric cloud user ID:
+The official Cleanergy app derives the key from your numeric cloud user ID:
 
 ```python
 import hashlib
 device_key = hashlib.md5(str(user_uid).encode()).hexdigest()[:10]
 ```
 
-Your numeric `user_uid` is returned by the cloud login API. If you know it,
-you can compute the key without capturing any traffic. The Integration setup
-(Method 2 below) does this for you automatically.
+However, the device doesn't enforce this derivation — **any 10-character hex
+string works as a key.** The uid-based MD5 is purely a convention in the app.
+Keys are per-device: a key that works on one unit will not work on another
+unless it has been paired with that same key.
 
-> **Note:** If the Cleanergy app is run before the login has completed, it falls
-> back to uid `"0"` (giving key `cfcd208495`). This can happen if the app is
-> opened immediately after a cache clear before the login HTTP response arrives.
+> **Note:** If the Cleanergy app runs before login completes, it falls back to
+> uid `"0"` (giving key `cfcd208495`). This can happen if the app is opened
+> immediately after a cache clear before the login HTTP response arrives.
 
-### Method 1 — ADB logcat (easiest, no root required)
+### Where the key comes from
 
-Requires USB debugging enabled on your Android phone ([how to enable](https://developer.android.com/studio/debug/dev-options)).
+During the integration setup (Step 2 above), you choose one of three methods:
 
-1. Connect your phone to your PC via USB.
-2. Open a terminal and run:
+- **Create New Key:** The integration pairs a new key over BLE. No prior
+  knowledge of the key is needed — just factory-reset the device first.
+- **Existing Key:** You supply a key you already know (from a btsnoop capture,
+  `adb logcat`, or a previous setup).
+- **Cloud Login:** The integration fetches the key from the OUPES cloud API
+  using your Cleanergy account.
 
-   **Windows:**
-   ```
-   adb logcat | findstr "8888888888888888888"
-   ```
-   **Mac / Linux:**
-   ```
-   adb logcat | grep "8888888888888888888"
-   ```
+### Standalone pairing script
 
-3. Open the **Cleanergy** app on your phone.
-4. Within a few seconds the terminal will print a JSON line like:
-
-   ```json
-   {"device_id":"756173148cd0b2a8e142","device_key":"bd236b1695","mac_address":"8C:D0:B2:A8:E1:44","name":"MEGA1",...}
-   ```
-
-5. Copy the value of `device_key`. That's it.
-
-> **Note:** `device_id` is not a per-unit unique ID — it encodes your device's
-> MAC address as a suffix. The truly unique identifier is the MAC address.
-
-### Method 2 — Cloud login (built into the integration setup)
-
-During initial setup the integration can log in to the Cleanergy cloud API
-(`api.upspowerstation.top`) with your account credentials to fetch the
-`device_key` automatically. Your credentials are not stored after setup — only
-the retrieved key is saved.
-
-Your device must already be registered in the Cleanergy app for it to appear
-in the device list.
-
-### Method 3 — PowerShell (no phone needed)
+If you want to pair outside of HA — for example, on a laptop for testing —
+use `debug_info/pair_device.py` from this repo:
 
 ```powershell
-# Replace YOUR_EMAIL and YOUR_PASSWORD with your Cleanergy app credentials
+# Factory-reset the device first: hold IoT button 5 s until rapid flashing
+python debug_info/pair_device.py <MAC> --key <new_10_hex_char_key>
+```
+
+The script replicates the exact BLE pairing protocol the Cleanergy app uses
+(AUTH → handshake polling → CLAIM with key + dummy MQTT token), with no cloud
+or app dependency. Typical pairing completes in one cycle (~18 seconds).
+
+### Finding an existing key (without cloud login)
+
+If the device is already paired and you need to recover the key:
+
+**ADB logcat (easiest, no root):** Connect your Android phone via USB with
+USB debugging enabled, then:
+
+```
+adb logcat | findstr "8888888888888888888"
+```
+
+Open the Cleanergy app — within seconds the terminal prints a JSON line
+containing `"device_key":"<your_key>"`.
+
+**PowerShell (no phone needed):**
+
+```powershell
 $body = '{"account":"YOUR_EMAIL","password":"YOUR_PASSWORD","client_type":2}'
 $r = Invoke-RestMethod -Uri "http://api.upspowerstation.top/api/app/user/login" `
      -Method POST -Body $body -ContentType "application/json"
@@ -275,36 +306,24 @@ $devices = Invoke-RestMethod -Uri "http://api.upspowerstation.top/api/app/device
 $devices.data | Select-Object name, mac_address, device_id, device_key | Format-Table -AutoSize
 ```
 
-### Re-keying the device (experimental — not yet confirmed working)
+---
 
-> ⚠️ **This method is not yet confirmed working.** The `0x03` BLE claim
-> sequence was observed in app captures but reliably triggering it from a
-> third-party script has proven difficult. Use at your own risk.
+## Debug Tools
 
-If you want to set a known, predictable key on the device — for example after a
-factory reset or when taking ownership from another account — use
-`set_device_key.py` from this repo.
+The [`debug_info/`](debug_info/) directory contains standalone diagnostic
+scripts and a detailed [protocol reference](debug_info/README.md) covering the
+full BLE and WiFi/cloud communication protocol.
 
-**Hardware reset first (required):** Press and hold the IoT button for **5 seconds**
-until the indicator light changes. This clears the stored pairing key and puts
-the device into pairing mode (indicator flashes rapidly). You must do this before
-the script can program a new key.
+Key tools for troubleshooting:
 
-```powershell
-cd oupes-mega-hass
-python set_device_key.py <MAC> --key <new_key>
-```
+| Script | Purpose |
+|--------|---------|
+| `debug_info/scan_ble.py` | Scan for TT devices and display live telemetry |
+| `debug_info/parse_btsnoop.py` | Parse btsnoop HCI logs from Android bugreports |
+| `debug_info/pair_device.py` | Standalone BLE pairing (factory-reset + re-key) |
+| `debug_info/probe_key.py` | Try candidate keys against a device to find the right one |
+| `debug_info/ble_diag.py` | Verify BLE GATT services and characteristics |
 
-If the device already has a known key and you want to re-key without the button
-hold (software factory reset path — also unverified):
-```powershell
-python set_device_key.py <MAC> --current-key <current_key> --key <new_key>
-```
-
-The new key must be exactly 10 lowercase hex characters. If `--key` is omitted
-a random valid hex key is generated and printed at startup.
-
-> **Note from manufacturer docs:** "One power station cannot be controlled by
-> multiple phones at the same time. Android devices need to unpair the first
-> device before pairing a second one." The hardware button hold resets this
-> pairing state on the device side.
+See [`debug_info/README.md`](debug_info/README.md) for the complete protocol
+documentation, including the pairing/claiming protocol, packet format,
+telemetry attribute map, and output control commands.

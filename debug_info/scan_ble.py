@@ -2,7 +2,7 @@
 scan_ble.py — Scan for OUPES Mega 1 "TT" BLE devices and display live telemetry.
 
 Usage:
-    python scan_ble.py
+    python scan_ble.py --key <your_10_hex_char_device_key>
 
 Requires:
     pip install bleak
@@ -23,6 +23,7 @@ Key BLE facts (from HCI snoop capture):
 
 import asyncio
 import sys
+import argparse
 from datetime import timedelta
 from bleak import BleakScanner, BleakClient
 from bleak.exc import BleakError
@@ -32,24 +33,23 @@ CHAR_UUID    = "00002b10-0000-1000-8000-00805f9b34fb"
 
 # Attribute map — numbers match both BLE and WiFi/cloud protocol
 ATTR_MAP = {
-    1:   ("AC Output Enabled",          "bool"),
-    2:   ("DC Output Enabled",          "bool"),
+    1:   ("Output Enable Bitmask",       "raw"),   # bit0=AC, bit1=DC12V, bit2=USB
+    2:   ("Unknown (attr 2)",           "raw"),   # possibly legacy output flag; always 0
     3:   ("Battery %",                  "pct"),
-    4:   ("AC Output Power",            "W"),
-    5:   ("AC Input (Grid) Power",      "W"),
-    6:   ("DC / Car Charger Input",     "W"),
-    7:   ("DC/USB-C Output",            "W"),  # ⚠️ was "Solar Input (MPPT)" — confirmed DC/USB-C output wattage
-    8:   ("Unknown Input",              "raw"),
-    9:   ("Unknown",                    "raw"),
-    21:  ("Total Input (Grid + Solar)",  "W"),
-    22:  ("Grid Input",                  "W"),
-    23:  ("AC Input Connected",         "bool"),
+    4:   ("Total Output Power",         "W"),     # AC + DC12V + USB-C + USB-A combined
+    5:   ("AC Inverter Output Power",   "W"),     # pure AC output; 0 when AC disabled
+    6:   ("DC 12V Output Power",        "W"),     # cigarette-lighter port
+    7:   ("USB-C Output Power",         "W"),
+    8:   ("USB-A Output Power",         "W"),
+    9:   ("Unknown (attr 9)",           "raw"),   # always 0 in all captures
+    21:  ("Total Input Power",           "W"),    # grid + solar (incl. B2 secondary ports)
+    22:  ("Grid Input Power",            "W"),
+    23:  ("Solar Input Power",           "W"),    # MPPT; 1 = noise floor with nothing connected
     30:  ("Remaining Runtime",          "min"),
-    32:  ("Main Unit Temperature",       "F/10"),  # ⚠️ was Battery Pack Voltage — rises under load, matches app temp display
-                                                       # ⚠️ unit may be C/10 not F/10: 949→970 correlates with thermal trip; 97°C fits, 36°C does not
-    51:  ("Unknown (attr 51)",       "chargemode"),  # constant=2; NOT charging mode (confirmed same in both Slow+Fast charging sessions)
-    53:  ("Unknown (attr 53)",          "raw"),
-    54:  ("Unknown (attr 54)",          "raw"),
+    32:  ("Main Unit Temperature",       "F/10"), # ÷10 = °F (e.g. 963 → 96.3 °F)
+    51:  ("Ext Battery Count",           "raw"),  # number of B2 expansion batteries connected
+    53:  ("B2 Input Power",             "W"),    # B2 secondary port (solar/DC in)
+    54:  ("B2 Output Power",            "W"),    # B2 total output (chain + USB/accessories)
     84:  ("AC Output Control",          "bool"),
     105: ("AC Inverter Protection",    "bool"),  # 1 = inverter protection/thermal warning (~60s delayed after hardware trip)
                                                    #   AC output suppressed for 8-10 min recovery; fans may struggle; also 1 at elevated temp during run
@@ -228,19 +228,40 @@ KEEPALIVE_INTERVAL      = 10.0  # seconds between subsequent keepalives
 # Sent to HANDLE_WRITE after connecting. The device sends telemetry
 # autonomously but this sequence completes the app handshake.
 # Packet 6 (index 5) contains a device serial/token string embedded at bytes 4-13.
-APP_INIT_SEQUENCE = [
-    bytes.fromhex("0100019901010101010101010101010101010192"),
-    bytes.fromhex("010101010101010101010101010101010101018f"),
-    bytes.fromhex("0102000000000000000000000000000000000082"),
-    bytes.fromhex("01030000000000000000000000000000000000a8"),
-    bytes.fromhex("010400000000000000000000000000000000007e"),
-    bytes.fromhex("0105000000000000000000000000000000000054"),
-    bytes.fromhex("01060000626432333662313639350000000000d7"),  # "bd236b1695" token
-    bytes.fromhex("0107000000000000000000000000000000000000"),
-    bytes.fromhex("0108000000000000000000000000000000000081"),
-    bytes.fromhex("01890000000000000000000000000000000000c0"),
-    bytes.fromhex("0180020101000000000000000000000000000016"),
-]
+
+def _crc8(data: bytes) -> int:
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+def build_init_sequence(device_key: str) -> list[bytes]:
+    """Build the 11-packet init sequence with the given 10-char hex device key."""
+    # Base packets — packet 6 will have the key injected
+    base = [
+        bytearray.fromhex("0100019901010101010101010101010101010100"),
+        bytearray.fromhex("0101010101010101010101010101010101010100"),
+        bytearray.fromhex("0102000000000000000000000000000000000000"),
+        bytearray.fromhex("0103000000000000000000000000000000000000"),
+        bytearray.fromhex("0104000000000000000000000000000000000000"),
+        bytearray.fromhex("0105000000000000000000000000000000000000"),
+        bytearray.fromhex("0106000000000000000000000000000000000000"),  # key goes here
+        bytearray.fromhex("0107000000000000000000000000000000000000"),
+        bytearray.fromhex("0108000000000000000000000000000000000000"),
+        bytearray.fromhex("0189000000000000000000000000000000000000"),
+        bytearray.fromhex("0180020101000000000000000000000000000000"),
+    ]
+    # Inject device_key ASCII into packet 6, bytes [4:14]
+    key_bytes = device_key.encode("ascii")
+    base[6][4:4 + len(key_bytes)] = key_bytes
+    # Compute CRC-8 for each packet
+    result = []
+    for pkt in base:
+        pkt[19] = _crc8(bytes(pkt[:19]))
+        result.append(bytes(pkt))
+    return result
 
 
 async def _connect_and_collect(
@@ -248,6 +269,7 @@ async def _connect_and_collect(
     write_char: str,
     handler,
     duration: float,
+    init_sequence: list[bytes],
 ) -> tuple[bool, bool]:
     """
     Single connection attempt.  Returns (dropped_quickly, got_data).
@@ -300,8 +322,8 @@ async def _connect_and_collect(
             await asyncio.sleep(0.2)
             if disconnected_event.is_set():
                 return True, got_data
-            print(f"  Sending {len(APP_INIT_SEQUENCE)}-packet init sequence ...")
-            for i, pkt in enumerate(APP_INIT_SEQUENCE):
+            print(f"  Sending {len(init_sequence)}-packet init sequence ...")
+            for i, pkt in enumerate(init_sequence):
                 if disconnected_event.is_set():
                     print(f"  Disconnected during init at packet {i}")
                     return True, got_data
@@ -357,7 +379,7 @@ async def _connect_and_collect(
     return False, got_data
 
 
-async def monitor_device(device, duration: float = 20.0) -> DeviceState:
+async def monitor_device(device, duration: float = 20.0, device_key: str = "") -> DeviceState:
     """Connect to a single TT device, collect notifications for `duration` seconds.
 
     The OUPES Mega 1 sometimes makes a "cold probe" connection that drops in
@@ -371,6 +393,7 @@ async def monitor_device(device, duration: float = 20.0) -> DeviceState:
     """
     state = DeviceState(device.address, device.name or "TT")
     write_char = CHAR_UUID.replace("2b10", "2b11")
+    init_sequence = build_init_sequence(device_key) if device_key else build_init_sequence("0000000000")
     print(f"\nConnecting to {device.name} [{device.address}] ...")
 
     def accumulate(parsed: dict) -> None:
@@ -384,7 +407,7 @@ async def monitor_device(device, duration: float = 20.0) -> DeviceState:
             await asyncio.sleep(wait)
 
         dropped_quickly, got_data = await _connect_and_collect(
-            device.address, write_char, accumulate, duration
+            device.address, write_char, accumulate, duration, init_sequence
         )
 
         if not dropped_quickly:
@@ -395,6 +418,15 @@ async def monitor_device(device, duration: float = 20.0) -> DeviceState:
 
 
 async def main() -> None:
+    parser = argparse.ArgumentParser(description="Scan for OUPES Mega 1 'TT' BLE devices and display live telemetry.")
+    parser.add_argument("--key", required=True, help="10-character hex device key (e.g., bd236b1695)")
+    args = parser.parse_args()
+
+    device_key = args.key.strip().lower()
+    if len(device_key) != 10 or not all(c in "0123456789abcdef" for c in device_key):
+        print("Error: --key must be exactly 10 hex characters (e.g., bd236b1695)")
+        sys.exit(1)
+
     print("Scanning for 'TT' BLE devices (10 s) ...")
     scan_results: dict = await BleakScanner.discover(timeout=10.0, return_adv=True)
     # return_adv=True → {address: (BLEDevice, AdvertisementData)}
@@ -415,7 +447,7 @@ async def main() -> None:
     # Connect to all devices concurrently — each runs its own 20 s session in
     # parallel so total wall-clock time stays ~20 s regardless of device count.
     states: list[DeviceState] = await asyncio.gather(
-        *(monitor_device(dev, duration=20.0) for dev, _ in tt_devices)
+        *(monitor_device(dev, duration=20.0, device_key=device_key) for dev, _ in tt_devices)
     )
 
     # Final summary

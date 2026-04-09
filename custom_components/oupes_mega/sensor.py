@@ -124,6 +124,7 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
     OUPESSensorDescription(
         key="remaining_runtime",
         attr=30,
+        data_key="last_runtime_min",
         name="Remaining Runtime",
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.MEASUREMENT,
@@ -174,15 +175,15 @@ def _slot_descriptions(slot: int) -> list[OUPESSensorDescription]:
         OUPESSensorDescription(
             key=f"ext_battery_{slot}_runtime",
             attr=78,
+            data_key="last_runtime_min",
             slot=slot,
             name=f"{display_name} Runtime",
             device_class=SensorDeviceClass.DURATION,
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement=UnitOfTime.MINUTES,
             icon="mdi:timer-outline",
-            # Attr 78 is multiplexed: ≤6000 = runtime (min), ≥44000 = voltage (mV).
-            # Suppress non-runtime values so this entity doesn't show e.g. 53025 min.
-            value_fn=lambda v: v if v <= 6000 else None,
+            # Reads from the coordinator's persistent 'last_runtime_min' key so the
+            # last known runtime is held when attr 78 is in voltage-range (≥44000).
         ),
         OUPESSensorDescription(
             key=f"ext_battery_{slot}_voltage",
@@ -297,7 +298,8 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
                 lookup
             )
         else:
-            raw = self.coordinator.data["attrs"].get(desc.attr)
+            lookup = desc.data_key if desc.data_key is not None else desc.attr
+            raw = self.coordinator.data["attrs"].get(lookup)
 
         if raw is None:
             return None

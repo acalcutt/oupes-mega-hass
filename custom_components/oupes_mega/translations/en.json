@@ -14,10 +14,10 @@
         "data_description": {
           "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
           "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Auto-populated from the OUPES cloud API when possible. You can also enter or override it manually from a btsnoop/PCAPdroid capture of the Cleanergy app.",
+          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Auto-populated from the OUPES cloud API when possible. You can also enter or override it manually.",
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling every 30 seconds. Captures infrequent sensor updates (e.g. battery voltage) but blocks the official app from connecting at the same time.",
-          "debug_attr_logging": "Write all received attribute values (including unknown ones and attr-78 mystery values) to oupes_mega_<addr>_attrs.csv in your HA config folder. Emits warnings in the HA log for unrecognised attr-78 values.",
-          "debug_raw_logging": "Write every raw BLE notification payload as hex to oupes_mega_<addr>_raw.csv in your HA config folder. Useful for offline analysis with the debug_info scripts."
+          "debug_attr_logging": "Write all received attribute values (including unknown ones and attr-78 mystery values) to oupes_mega_<addr>_attrs.csv in your HA config folder.",
+          "debug_raw_logging": "Write every raw BLE notification payload as hex to oupes_mega_<addr>_raw.csv in your HA config folder."
         }
       }
     }
@@ -26,35 +26,69 @@
     "step": {
       "user": {
         "title": "OUPES Mega Power Station",
-        "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.\n\nTo auto-fetch the device key, enter your Cleanergy cloud credentials. Credentials are used once and are **not** stored.",
+        "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.",
         "data": {
           "address": "Bluetooth MAC Address",
-          "name": "Device Name",
-          "cloud_email": "Cleanergy Cloud Email (optional)",
-          "cloud_password": "Cleanergy Cloud Password (optional)",
-          "device_key": "Device Key (optional)"
+          "name": "Device Name"
         },
         "data_description": {
-          "address": "Example: 8C:D0:B2:A7:EC:AF",
-          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
-          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
-          "device_key": "10-character hex key unique to your device. Leave blank and provide cloud credentials to auto-fetch, or enter manually from a btsnoop/PCAPdroid capture."
+          "address": "Example: 8C:D0:B2:A7:EC:AF"
         }
       },
       "bluetooth_confirm": {
         "title": "OUPES Mega Power Station",
-        "description": "Found **{name}** ({address}) nearby.\n\nDevice ID: `{device_id}`\n\nTo auto-fetch the device key, enter your Cleanergy cloud credentials below. Credentials are used once and are **not** stored.",
+        "description": "Found **{name}** ({address}) nearby.\n\nDevice ID: `{device_id}`\n\nClick **Submit** to continue with setup."
+      },
+      "choose_method": {
+        "title": "How would you like to provide the device key?",
+        "description": "Setting up **{name}** ({address}).\n\nChoose how you want to provide the device key needed for BLE communication.",
         "data": {
-          "cloud_email": "Cleanergy Cloud Email (optional)",
-          "cloud_password": "Cleanergy Cloud Password (optional)",
-          "device_key": "Device Key (optional)"
+          "key_method": "Key method"
+        }
+      },
+      "create_key": {
+        "title": "Create New Device Key",
+        "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.",
+        "data": {
+          "device_key": "Device Key (10 hex characters)"
         },
         "data_description": {
-          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
-          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
-          "device_key": "10-character hex key unique to your device. Leave blank and provide cloud credentials to auto-fetch, or enter manually from a btsnoop/PCAPdroid capture."
+          "device_key": "A random key has been pre-filled. You can keep it or enter your own 10-character hex key."
         }
+      },
+      "existing_key": {
+        "title": "Enter Existing Device Key",
+        "description": "Enter the 10-character hex device key for **{name}** ({address}).\n\nYou can find this key by:\n- Running `adb logcat | findstr 8888888888888888888` while opening the Cleanergy app\n- Checking a btsnoop/PCAPdroid capture of the Cleanergy app traffic\n- Using the Cleanergy cloud API via the PowerShell script in the README",
+        "data": {
+          "device_key": "Device Key"
+        },
+        "data_description": {
+          "device_key": "10-character hex key unique to your device (e.g. bd236b1695)."
+        }
+      },
+      "cloud_login": {
+        "title": "Fetch Key from Cleanergy Cloud",
+        "description": "Log in with your Cleanergy app credentials to automatically fetch the device key for **{name}** ({address}).\n\nYour credentials are used **once** to retrieve the key and are **not stored**.\n\n⚠️ The Cleanergy API uses unencrypted HTTP — this mirrors the official app's own behaviour.",
+        "data": {
+          "cloud_email": "Cleanergy Email",
+          "cloud_password": "Cleanergy Password"
+        },
+        "data_description": {
+          "cloud_email": "The email address you use to log in to the Cleanergy app.",
+          "cloud_password": "Your Cleanergy app password. Used once, not stored."
+        }
+      },
+      "pairing": {
+        "title": "Pairing in progress…",
+        "description": "Pairing with **{name}** ({address}). This takes about 20 seconds.\n\nPlease wait…"
+      },
+      "pairing_complete": {
+        "title": "Pairing successful!",
+        "description": "Successfully paired with **{name}** ({address})."
       }
+    },
+    "progress": {
+      "pairing": "Pairing with the device over Bluetooth… This takes about 20 seconds."
     },
     "abort": {
       "already_configured": "This device is already configured."
@@ -62,8 +96,11 @@
     "error": {
       "invalid_address": "Invalid Bluetooth MAC address format. Use XX:XX:XX:XX:XX:XX.",
       "invalid_device_key": "Device key must be exactly 10 hexadecimal characters (e.g. bd236b1695).",
-      "cloud_login_failed": "Cloud login failed. Check your Cleanergy email and password, or enter the device key manually.",
-      "no_device_key": "A device key is required. Enter your Cleanergy cloud email and password to auto-fetch it, or provide the 10-character hex key manually."
+      "cloud_login_failed": "Cloud login failed. Check your Cleanergy email and password, or go back and try a different method.",
+      "no_device_key": "A device key is required. Go back and choose a method to provide it.",
+      "pairing_device_not_found": "Device not found via Bluetooth. Make sure the device is powered on, in range, and in pairing mode (hold IoT button 5 seconds until rapid flash).",
+      "pairing_connection_failed": "Could not connect to the device. Make sure no other app (e.g. Cleanergy) is connected and the device is in pairing mode.",
+      "pairing_timeout": "Pairing did not complete. Try again — make sure the device is in pairing mode (hold IoT button 5 seconds until rapid flash). The device may need a moment after the reset before it accepts pairing."
     }
   }
 }

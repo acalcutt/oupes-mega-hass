@@ -1,30 +1,21 @@
 #!/usr/bin/env python3
 """
-probe_key.py — Try all known keys against an OUPES Mega to find the stored one.
+probe_key.py — Try candidate keys against an OUPES Mega to find the stored one.
 
 Tries each candidate key with the 0x01 AUTH sequence and reports which one
 gets a notification response from the device.
 
 Usage:
-    python probe_key.py 8C:D0:B2:A8:E1:44
+    python probe_key.py <MAC> --uid 12345 --uid 67890
+    python probe_key.py <MAC> --key bd236b1695 --key cfcd208495
 """
-import asyncio, sys, hashlib
+import asyncio, sys, hashlib, argparse
 from bleak import BleakClient, BleakScanner
 
 WRITE_CHAR  = "00002b11-0000-1000-8000-00805f9b34fb"
 NOTIFY_CHAR = "00002b10-0000-1000-8000-00805f9b34fb"
 
-MAC = sys.argv[1] if len(sys.argv) > 1 else "8C:D0:B2:A8:E1:44"
-
 def md5key(uid): return hashlib.md5(str(uid).encode()).hexdigest()[:10]
-
-CANDIDATES = [
-    ("uid=60859 (original account)",  md5key(60859)),   # bd236b1695
-    ("uid=20902 (new account)",        md5key(20902)),   # 4c282b63af
-    ("uid=0 (fallback/bugreport23)",   md5key(0)),       # cfcd208495
-    ("uid=1",                          md5key(1)),
-    ("uid=2",                          md5key(2)),
-]
 
 def _crc8(data):
     crc = 0
@@ -96,10 +87,37 @@ async def probe_key(key, label):
     return len(received) > 0, len(telemetry)
 
 async def main():
-    print(f"Key probe for {MAC}")
-    print(f"Trying {len(CANDIDATES)} candidate keys...\n")
+    parser = argparse.ArgumentParser(description="Try candidate keys against an OUPES Mega.")
+    parser.add_argument("mac", help="Bluetooth MAC address (e.g., 8C:D0:B2:A8:E1:44)")
+    parser.add_argument("--uid", action="append", type=int, default=[],
+                        help="Cleanergy user ID to derive a key from (repeatable)")
+    parser.add_argument("--key", action="append", default=[],
+                        help="Raw 10-hex-char key to try (repeatable)")
+    args = parser.parse_args()
 
-    for label, key in CANDIDATES:
+    global MAC
+    MAC = args.mac
+
+    candidates = []
+    # Always try uid=0 (app fallback key)
+    candidates.append(("uid=0 (app fallback)", md5key(0)))
+    for uid in args.uid:
+        candidates.append((f"uid={uid}", md5key(uid)))
+    for key in args.key:
+        key = key.strip().lower()
+        if len(key) != 10 or not all(c in "0123456789abcdef" for c in key):
+            print(f"Warning: skipping invalid key {key!r} (must be 10 hex chars)")
+            continue
+        candidates.append((f"key={key}", key))
+
+    if len(candidates) == 1 and not args.uid and not args.key:
+        print("Tip: supply --uid <your_cleanergy_uid> or --key <hex_key> to test specific keys.")
+        print("     Running with just the uid=0 fallback key.\n")
+
+    print(f"Key probe for {MAC}")
+    print(f"Trying {len(candidates)} candidate key(s)...\n")
+
+    for label, key in candidates:
         got_response, n_telem = await probe_key(key, label)
         if got_response:
             print(f"\n✅  KEY FOUND: {key!r}  ({label})")
@@ -112,6 +130,6 @@ async def main():
 
     print("\n❌  None of the candidate keys matched.")
     print("   The device may have been re-keyed to an unknown key.")
-    print("   Hold the button to factory-reset, then re-run set_device_key.py without --current-key.")
+    print("   Hold IoT button 5s to factory-reset, then use pair_device.py to set a new key.")
 
 asyncio.run(main())

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from bleak import BleakClient
 from bleak.exc import BleakError
+from bleak_retry_connector import establish_connection
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.core import HomeAssistant
@@ -188,19 +189,21 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 )
                 await asyncio.sleep(wait)
 
-            # Prefer a device object from HA's BT scanner cache (gives the
-            # right adapter hint), but fall back to the raw MAC string so a
-            # single missed advertisement window doesn't abort all retries.
+            # Get device object from HA's BT scanner cache (required by
+            # bleak-retry-connector's establish_connection).
             ble_device = async_ble_device_from_address(
                 self.hass, self.address, connectable=True
             )
             if ble_device is None:
                 _LOGGER.debug(
-                    "BLE scanner hasn't seen %s recently — attempting direct "
-                    "connect by MAC address (attempt %d/%d)",
+                    "BLE scanner hasn't seen %s recently — skipping "
+                    "attempt %d/%d",
                     self.address, attempt + 1, MAX_ATTEMPTS,
                 )
-                ble_device = self.address  # bleak accepts a raw MAC string
+                last_exc = UpdateFailed(
+                    f"Device {self.address} not seen by BLE scanner"
+                )
+                continue
 
             try:
                 dropped_quickly, data = await self._connect_once(ble_device)
@@ -307,8 +310,12 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     ext_batteries[current_slot][attr] = val
                     if attr == 78 and ATTR78_MV_MIN <= val <= ATTR78_MV_MAX:
                         ext_batteries[current_slot]["last_voltage_mv"] = val
+                    if attr == 78 and val <= ATTR78_RUNTIME_MAX:
+                        ext_batteries[current_slot]["last_runtime_min"] = val
                 elif attr != 101:
                     attrs[attr] = val
+                    if attr == 30:
+                        attrs["last_runtime_min"] = val
             if self._debug_attrs or self._debug_raw:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 self._debug_log_packet(
@@ -316,39 +323,79 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     current_slot, c_rolling_soc[0], c_rolling_grid[0],
                 )
 
-        ble_device = (
-            async_ble_device_from_address(self.hass, self.address, connectable=True)
-            or self.address
+        ble_device = async_ble_device_from_address(
+            self.hass, self.address, connectable=True
         )
+        if ble_device is None:
+            raise BleakError(
+                f"Device {self.address} not seen by BLE scanner"
+            )
 
+        client = await establish_connection(
+            client_class=BleakClient,
+            device=ble_device,
+            name=self.address,
+            disconnected_callback=on_disconnect,
+            max_attempts=2,
+        )
         try:
-            async with BleakClient(
-                ble_device,
-                timeout=15.0,
-                disconnected_callback=on_disconnect,
-            ) as client:
-                await asyncio.sleep(1.8)
+            await asyncio.sleep(1.8)
+            if disconnected_event.is_set():
+                return
+
+            await client.start_notify(NOTIFY_CHAR_UUID, notification_handler)
+            await asyncio.sleep(0.2)
+            if disconnected_event.is_set():
+                return
+
+            for i, pkt in enumerate(self._init_sequence):
                 if disconnected_event.is_set():
                     return
+                try:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, pkt, response=False
+                    )
+                    await asyncio.sleep(0.01)
+                except BleakError as exc:
+                    _LOGGER.warning(
+                        "Init packet %d error (continuous) on %s: %s",
+                        i, self.address, exc,
+                    )
 
-                await client.start_notify(NOTIFY_CHAR_UUID, notification_handler)
-                await asyncio.sleep(0.2)
-                if disconnected_event.is_set():
-                    return
+            if self._pending_command is not None:
+                cmd = self._pending_command
+                self._pending_command = None
+                try:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, cmd, response=False
+                    )
+                    await asyncio.sleep(0.1)
+                except BleakError as exc:
+                    _LOGGER.warning(
+                        "Queued command error (continuous) on %s: %s",
+                        self.address, exc,
+                    )
 
-                for i, pkt in enumerate(self._init_sequence):
-                    if disconnected_event.is_set():
-                        return
-                    try:
-                        await client.write_gatt_char(
-                            WRITE_CHAR_UUID, pkt, response=False
-                        )
-                        await asyncio.sleep(0.01)
-                    except BleakError as exc:
-                        _LOGGER.warning(
-                            "Init packet %d error (continuous) on %s: %s",
-                            i, self.address, exc,
-                        )
+            # Keepalive + data-push loop — runs until disconnected or cancelled
+            await asyncio.sleep(KEEPALIVE_FIRST_DELAY)
+            while not disconnected_event.is_set():
+                if attrs or any(ext_batteries.values()):
+                    data: OUPESData = {
+                        "attrs": dict(attrs),
+                        "ext_batteries": {
+                            s: dict(sd) for s, sd in ext_batteries.items()
+                        },
+                    }
+                    self._live_data = data
+                    self.last_successful_poll = datetime.now()
+                    self.async_set_updated_data(data)
+
+                try:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, KEEPALIVE_PKT, response=False
+                    )
+                except BleakError:
+                    break
 
                 if self._pending_command is not None:
                     cmd = self._pending_command
@@ -357,59 +404,29 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                         await client.write_gatt_char(
                             WRITE_CHAR_UUID, cmd, response=False
                         )
-                        await asyncio.sleep(0.1)
                     except BleakError as exc:
                         _LOGGER.warning(
-                            "Queued command error (continuous) on %s: %s",
+                            "Command error (continuous) on %s: %s",
                             self.address, exc,
                         )
 
-                # Keepalive + data-push loop — runs until disconnected or cancelled
-                await asyncio.sleep(KEEPALIVE_FIRST_DELAY)
-                while not disconnected_event.is_set():
-                    if attrs or any(ext_batteries.values()):
-                        data: OUPESData = {
-                            "attrs": dict(attrs),
-                            "ext_batteries": {
-                                s: dict(sd) for s, sd in ext_batteries.items()
-                            },
-                        }
-                        self._live_data = data
-                        self.last_successful_poll = datetime.now()
-                        self.async_set_updated_data(data)
-
-                    try:
-                        await client.write_gatt_char(
-                            WRITE_CHAR_UUID, KEEPALIVE_PKT, response=False
-                        )
-                    except BleakError:
-                        break
-
-                    if self._pending_command is not None:
-                        cmd = self._pending_command
-                        self._pending_command = None
-                        try:
-                            await client.write_gatt_char(
-                                WRITE_CHAR_UUID, cmd, response=False
-                            )
-                        except BleakError as exc:
-                            _LOGGER.warning(
-                                "Command error (continuous) on %s: %s",
-                                self.address, exc,
-                            )
-
-                    try:
-                        await asyncio.wait_for(
-                            disconnected_event.wait(), timeout=KEEPALIVE_INTERVAL
-                        )
-                    except asyncio.TimeoutError:
-                        pass
+                try:
+                    await asyncio.wait_for(
+                        disconnected_event.wait(), timeout=KEEPALIVE_INTERVAL
+                    )
+                except asyncio.TimeoutError:
+                    pass
 
         except BleakError as exc:
             _LOGGER.debug(
                 "BLE error in continuous connection for %s: %s", self.address, exc
             )
             raise
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
 
     # ── Internal BLE connection logic ─────────────────────────────────────────
 
@@ -460,8 +477,12 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     ext_batteries[current_slot][attr] = val
                     if attr == 78 and ATTR78_MV_MIN <= val <= ATTR78_MV_MAX:
                         ext_batteries[current_slot]["last_voltage_mv"] = val
+                    if attr == 78 and val <= ATTR78_RUNTIME_MAX:
+                        ext_batteries[current_slot]["last_runtime_min"] = val
                 elif attr != 101:
                     attrs[attr] = val
+                    if attr == 30:
+                        attrs["last_runtime_min"] = val
             if self._debug_attrs or self._debug_raw:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 self._debug_log_packet(
@@ -470,87 +491,103 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 )
 
         try:
-            async with BleakClient(
-                ble_device,
-                timeout=15.0,
+            client = await establish_connection(
+                client_class=BleakClient,
+                device=ble_device,
+                name=self.address,
                 disconnected_callback=on_disconnect,
-            ) as client:
+                max_attempts=2,
+            )
+        except asyncio.CancelledError:
+            raise  # let HA handle task cancellation
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.debug("BLE error on %s: %s", self.address, exc)
+            raise UpdateFailed(f"BLE connection failed for {self.address}: {exc}") from exc
 
-                # ── Step 1: wait for GATT discovery (match Android timing) ───
-                await asyncio.sleep(1.8)
+        try:
+            # ── Step 1: wait for GATT discovery (match Android timing) ───
+            await asyncio.sleep(1.8)
+            if disconnected_event.is_set():
+                uptime = _time.monotonic() - connect_ts
+                return (uptime < 2.0 and not got_data), data
+
+            # ── Step 2: subscribe to notifications ───────────────────────
+            await client.start_notify(NOTIFY_CHAR_UUID, notification_handler)
+            await asyncio.sleep(0.2)
+            if disconnected_event.is_set():
+                return True, data
+
+            # ── Step 3: send 11-packet init sequence ─────────────────────
+            for i, pkt in enumerate(self._init_sequence):
                 if disconnected_event.is_set():
                     uptime = _time.monotonic() - connect_ts
                     return (uptime < 2.0 and not got_data), data
-
-                # ── Step 2: subscribe to notifications ───────────────────────
-                await client.start_notify(NOTIFY_CHAR_UUID, notification_handler)
-                await asyncio.sleep(0.2)
-                if disconnected_event.is_set():
-                    return True, data
-
-                # ── Step 3: send 11-packet init sequence ─────────────────────
-                for i, pkt in enumerate(self._init_sequence):
-                    if disconnected_event.is_set():
-                        uptime = _time.monotonic() - connect_ts
-                        return (uptime < 2.0 and not got_data), data
-                    try:
-                        await client.write_gatt_char(
-                            WRITE_CHAR_UUID, pkt, response=False
-                        )
-                        await asyncio.sleep(0.01)
-                    except BleakError as exc:
-                        _LOGGER.warning(
-                            "Init packet %d error on %s: %s", i, self.address, exc
-                        )
-
-                # ── Step 3b: send any queued command ─────────────────────────
-                if self._pending_command is not None:
-                    cmd = self._pending_command
-                    self._pending_command = None
-                    try:
-                        await client.write_gatt_char(
-                            WRITE_CHAR_UUID, cmd, response=False
-                        )
-                        await asyncio.sleep(0.1)
-                    except BleakError as exc:
-                        _LOGGER.warning(
-                            "Failed to send queued command to %s: %s",
-                            self.address, exc,
-                        )
-
-                # ── Step 4: keepalive loop + collect notifications ────────────
-                async def keepalive_loop() -> None:
-                    await asyncio.sleep(KEEPALIVE_FIRST_DELAY)
-                    while not disconnected_event.is_set():
-                        try:
-                            await client.write_gatt_char(
-                                WRITE_CHAR_UUID, KEEPALIVE_PKT, response=False
-                            )
-                        except BleakError:
-                            break
-                        await asyncio.sleep(KEEPALIVE_INTERVAL)
-
-                keepalive_task = asyncio.create_task(keepalive_loop())
                 try:
-                    await asyncio.wait_for(
-                        disconnected_event.wait(), timeout=SCAN_DURATION
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, pkt, response=False
                     )
-                except asyncio.TimeoutError:
-                    pass  # normal — full duration elapsed
-                finally:
-                    keepalive_task.cancel()
-                    try:
-                        await keepalive_task
-                    except (asyncio.CancelledError, BleakError):
-                        pass
+                    await asyncio.sleep(0.01)
+                except BleakError as exc:
+                    _LOGGER.warning(
+                        "Init packet %d error on %s: %s", i, self.address, exc
+                    )
 
+            # ── Step 3b: send any queued command ─────────────────────────
+            if self._pending_command is not None:
+                cmd = self._pending_command
+                self._pending_command = None
                 try:
-                    await client.stop_notify(NOTIFY_CHAR_UUID)
-                except BleakError:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, cmd, response=False
+                    )
+                    await asyncio.sleep(0.1)
+                except BleakError as exc:
+                    _LOGGER.warning(
+                        "Failed to send queued command to %s: %s",
+                        self.address, exc,
+                    )
+
+            # ── Step 4: keepalive loop + collect notifications ────────────
+            async def keepalive_loop() -> None:
+                await asyncio.sleep(KEEPALIVE_FIRST_DELAY)
+                while not disconnected_event.is_set():
+                    try:
+                        await client.write_gatt_char(
+                            WRITE_CHAR_UUID, KEEPALIVE_PKT, response=False
+                        )
+                    except BleakError:
+                        break
+                    await asyncio.sleep(KEEPALIVE_INTERVAL)
+
+            keepalive_task = asyncio.create_task(keepalive_loop())
+            try:
+                await asyncio.wait_for(
+                    disconnected_event.wait(), timeout=SCAN_DURATION
+                )
+            except asyncio.TimeoutError:
+                pass  # normal — full duration elapsed
+            finally:
+                keepalive_task.cancel()
+                try:
+                    await keepalive_task
+                except (asyncio.CancelledError, BleakError):
                     pass
+
+            try:
+                await client.stop_notify(NOTIFY_CHAR_UUID)
+            except BleakError:
+                pass
 
         except BleakError as exc:
             _LOGGER.debug("BLE error on %s: %s", self.address, exc)
             raise UpdateFailed(f"BLE connection failed for {self.address}: {exc}") from exc
+        except asyncio.CancelledError:
+            _LOGGER.debug("BLE connection to %s was cancelled", self.address)
+            raise
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
 
         return False, data

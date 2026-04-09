@@ -1,6 +1,7 @@
 """OUPES Mega Power Station — Home Assistant custom integration."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -47,6 +48,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # is out of range so HA will retry setup automatically.
     try:
         await coordinator.async_config_entry_first_refresh()
+    except asyncio.CancelledError:
+        raise ConfigEntryNotReady(
+            f"Setup for OUPES Mega {address} was interrupted — will retry"
+        )
     except Exception as exc:
         raise ConfigEntryNotReady(
             f"Could not connect to OUPES Mega {address}: {exc}"

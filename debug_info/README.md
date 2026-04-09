@@ -26,6 +26,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [Obtaining the `device_key`](#obtaining-the-device_key)
   - [Connection Sequence](#connection-sequence-1)
   - [Init Sequence](#init-sequence)
+  - [BLE Pairing / Re-keying Protocol](#ble-pairing--re-keying-protocol)
   - [Packet Format](#packet-format)
   - [BLE Output Control](#ble-output-control)
   - [BLE Python Example](#ble-python-example)
@@ -489,7 +490,13 @@ The `device_key` is assigned by the cloud server and stored in the app's local M
 
 #### Automated retrieval (recommended)
 
-The HA integration's config flow logs in to the OUPES cloud API with your Cleanergy account credentials, fetches the device list, and extracts the `device_key` for your device. Credentials are used once during setup and are **not** stored. See the [Cloud Login API](#cloud-login-api) section above for the full protocol.
+The HA integration's config flow offers three methods to provide the device key during setup:
+
+1. **Create New Key** — pairs the device directly over BLE using the [pairing protocol](#ble-pairing--re-keying-protocol) below. No prior knowledge of the key is needed — just factory-reset the device first (hold IoT button 5 s). This is the recommended method for new setups.
+2. **Cloud Login** — logs in to the OUPES cloud API with your Cleanergy credentials, fetches the device list, and extracts the key. Credentials are used once and not stored.
+3. **Enter Existing Key** — paste a key you already know from a previous setup or capture.
+
+For cloud login, the full protocol is:
 
 ```
 1. User enters Cleanergy email + password in HA integration setup
@@ -574,6 +581,82 @@ KEEPALIVE = bytes.fromhex("0180030254010000000000000000000000000076")
 > **Device-specific token:** Init packet 7 (index 6) must contain your device's `device_key` at bytes 4–13 as 10-character ASCII hex. The HA integration builds this packet automatically via `build_init_sequence(device_key)` in `protocol.py`. Replace the zeros in the example above with your key’s hex encoding. Obtain your key via the cloud login API (see below) or from a btsnoop/PCAPdroid capture.
 
 Subscribe to notifications on `00002b10` — the device pushes telemetry packets continuously after the handshake is complete.
+
+---
+
+### BLE Pairing / Re-keying Protocol
+
+The Cleanergy app uses a multi-phase BLE handshake to pair a new device or
+re-key an existing one. The sequence was reverse-engineered from btsnoop HCI
+captures and confirmed live against hardware.
+
+**Prerequisite — factory reset:** Press and hold the IoT button for **5 seconds**
+until the LED changes to rapid flashing. This clears the stored key and puts
+the device into pairing mode. Without this, the CLAIM sequence is rejected.
+
+All packets are **20 bytes**, with byte 19 = CRC-8/SMBUS (poly `0x07`, init `0x00`)
+over bytes 0–18.
+
+#### Phase 1 — AUTH (11 packets, slot `0x01`)
+
+The 11-packet AUTH sequence is identical to the normal init sequence (see above),
+with the device key embedded in packet 6 at bytes `[4:14]` as 10-byte ASCII hex.
+Packets are sent with ~80 ms inter-packet delay.
+
+#### Phase 2 — Handshake polling (slot `0x03`, ~5 s)
+
+After AUTH, send timestamp probe packets every 300 ms for ~17 iterations:
+
+```
+Byte:   [0]   [1]   [2:3]   [4:7]            [8:18]  [19]
+        0x03  0x80  0x0004  <unix_ts LE u32>  zeros   CRC
+```
+
+The device responds via notifications. Response decoding:
+
+| Pattern | Meaning |
+|---------|---------|
+| `[0]=0x03, [1]=0x80, [2]=0x01, [4]=0x00` | **GO** — ready to accept CLAIM data |
+| `[0]=0x01, [1]=0x80, [2]=0x01, [4]=0x00` | **Configured** — device already has this key |
+| `[0]=0x01, [1]=0x80, [2]=0x01, [4]=0x03` | **Wait** — device unconfigured, not yet ready |
+| `[0]=0x01, [1]∈{0x00,0x81}, [2]=0x0A` | **Telemetry** — device streaming data (already paired) |
+
+#### Phase 3 — Second AUTH + poll
+
+Send one `0x01`-slot timestamp packet, then resend the full 11-packet AUTH
+sequence, followed by another round of ~17 handshake polls. The Cleanergy app
+always double-sends AUTH — this mirrors that behaviour.
+
+#### Phase 4 — CLAIM (10 packets, slot `0x03`)
+
+The CLAIM sequence writes the device key and a 30-byte MQTT token. The 40-byte
+blob (`key[10] + mqtt_token[30]`) is spread across packets 6, 7, and 8:
+
+| Pkt | Byte[1] | Content |
+|-----|---------|---------|
+| 0 | `0x00` | Header: `0x99` flag, bytes 3–18 = `0x02` padding |
+| 1 | `0x01` | All `0x02` padding |
+| 2–5 | `0x02`–`0x05` | Zero payload |
+| 6 | `0x06` | `[4:14]` = key, `[14:19]` = token bytes 0–4 |
+| 7 | `0x07` | `[2:19]` = token bytes 5–21 |
+| 8 | `0x08` | `[2:10]` = token bytes 22–29, rest zeros |
+| 9 | `0x89` | Terminator (high bit set) |
+
+For local-only operation (no cloud push), use a dummy MQTT token:
+`HALOCAL000000000000000000000000` (30 ASCII bytes).
+
+Packets are sent with ~50 ms inter-packet delay.
+
+#### Phase 5 — Keepalive + confirmation
+
+Send the keepalive packet and wait 5–10 s. Success is indicated by any of:
+- `claim_accepted` response (slot `0x03` GO pattern)
+- `auth_configured` response (slot `0x01` configured pattern)
+- Telemetry packets arriving (device is streaming data)
+
+If none of these occur, disconnect, wait 3–5 s, and reconnect for a new cycle.
+The Cleanergy app uses the same multi-cycle reconnect approach.
+Typical pairing completes in a single cycle (~18 seconds).
 
 ---
 
