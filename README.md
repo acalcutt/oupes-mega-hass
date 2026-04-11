@@ -1,8 +1,8 @@
 # OUPES Mega — Home Assistant Custom Integration
 
-A local Bluetooth (BLE) integration for the **OUPES Mega 1** power station.
-Polls the device every minute over BLE and exposes sensors, binary sensors, and
-toggle switches with no cloud dependency.
+A local Bluetooth (BLE) integration for **OUPES Mega** power stations.
+Connects via BLE (continuous or polled) and exposes sensors, binary sensors,
+toggle switches, and writable device settings — all with no cloud dependency.
 
 ---
 
@@ -13,7 +13,21 @@ toggle switches with no cloud dependency.
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES Mega 1 | Power on, BLE enabled — press the IoT button on the unit to enable it (indicator flashes rapidly); the setting persists after that. Hold for 5 s to factory-reset the BLE pairing. |
+| OUPES power station | Any supported model (see below). Power on, BLE enabled — press the IoT button on the unit to enable it (indicator flashes rapidly); the setting persists after that. Hold for 5 s to factory-reset the BLE pairing. |
+
+### Supported Models
+
+The integration recognises the following models by their BLE product ID and
+applies model-specific feature sets (settings, entity availability) automatically:
+
+| Series | Models | Settings |
+|--------|--------|----------|
+| **Mega** | Mega 1, Mega 2, Mega 3, Mega 5 | Screen timeout, machine/WiFi/USB-car/XT90/AC standby timeouts, breath light, silent mode, charge mode |
+| **Exodus** | Exodus 1200, Exodus 1500, Exodus 2400, S024 Lite, S1 Lite | Screen timeout, breath light, silent mode, charge mode, AC/DC ECO modes + thresholds |
+| **Guardian** | Guardian 6000, HP2500, D5 V2 | Same as Mega (assumed) |
+| **Other** | S2 V2, DC 800, LP350, LP700, PB300, UPS 1200, UPS 1800 | Subset of settings per model |
+
+Unrecognised product IDs get a conservative safe set of settings.
 
 ### USB Bluetooth adapter for HA
 
@@ -120,7 +134,7 @@ retrieved key is saved.
 | External Battery 1–N Runtime | 78 | min | Per battery module; 5940 = charging/idle max |
 | External Battery 1–N Charge | 79 | % | Direct battery percentage (raw value = %) |
 | External Battery 1–N Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
-| Unknown (attr 51) | 51 | — | Constant 2 in all captures; meaning unconfirmed |
+| Connected Expansion Batteries | 51 | — | Count of connected expansion battery packs (0–2 on Mega 1) |
 
 > **Battery modules:** The Mega 1 has two **internal** battery modules (slots
 > 1 and 2). External **OUPES B2 Expansion Batteries** (LiFePO4, ~2 kWh each)
@@ -146,9 +160,11 @@ retrieved key is saved.
 | DC 12V Output | 1 (bit 1) | 12 V cigarette lighter enabled |
 | USB Output | 1 (bit 2) | USB-A and USB-C ports enabled |
 | AC Output Control | 84 | |
-| AC Inverter Protection | 105 | On when the inverter is in thermal protection / recovery mode |
+| Charge Mode | 105 | 1 = Fast Charge (factory default), 0 = Slow Charge |
 
 ### Switches (toggleable)
+
+**Output switches** (attr-1 bitmask — always available):
 
 | Entity | Notes |
 |--------|-------|
@@ -156,55 +172,105 @@ retrieved key is saved.
 | DC 12V Output | Turns the 12 V cigarette-lighter port on or off |
 | USB Output | Turns the combined USB-A / USB-C output on or off |
 
-Toggling a switch writes the updated output-enable bitmask to the device over
-BLE. The UI updates immediately (optimistic); the device's confirmed response
-is reflected on the next poll (~1 minute) or sooner if the coordinator refresh
-triggers quickly.
+**Setting switches** (Cmd3 DPID write — filtered by model series):
+
+| Entity | DPID | Notes |
+|--------|------|-------|
+| Silent Mode | 63 | Fan speed limiting |
+| Breath Light | 58 | Front LED breathing effect |
+| Fast Charge | 105 | On = fast, off = slow (requires AC output off and no grid input) |
+| AC ECO Mode | 110 | Auto-shutoff at low AC load (Exodus series only) |
+| DC ECO Mode | 112 | Auto-shutoff at low DC load (Exodus series only) |
+
+### Number Entities (writable settings)
+
+**Standby timeout settings** (Cmd3 DPID write — filtered by model series):
+
+| Entity | DPID | Unit | Range | Notes |
+|--------|------|------|-------|-------|
+| Screen Timeout | 41 | seconds | 0–3600 | Display auto-off delay |
+| Machine Standby Timeout | 45 | seconds | 0–43200 | Full device auto-off; 0 = disabled |
+| WiFi Standby Timeout | 46 | seconds | 0–86400 | WiFi module auto-off |
+| USB/Car Port Standby Timeout | 47 | seconds | 0–21600 | USB + 12 V auto-off |
+| XT90 Standby Timeout | 48 | seconds | 0–21600 | XT90 expansion port auto-off |
+| AC Output Standby Timeout | 49 | seconds | 0–21600 | AC inverter auto-off |
+| AC ECO Threshold | 111 | W | 0–100 | Exodus series only |
+| DC ECO Threshold | 113 | W | 0–100 | Exodus series only |
+
+Toggling a switch or setting a number writes the value to the device over BLE.
+The UI updates immediately (optimistic); the device's confirmed response is
+reflected on the next telemetry cycle.
 
 ---
 
 ## How It Works
 
-Each update cycle (default: every 1 minute):
+The integration supports two connection modes (configurable per device):
 
-1. HA's Bluetooth scanner finds the `TT` advertisement and provides a `BLEDevice`.
-2. The coordinator connects via `bleak_retry_connector.establish_connection()`.
-3. Waits ~1.8 s (matching Android GATT discovery timing the device expects).
-4. Subscribes to the notify characteristic and sends an 11-packet init sequence
-   (packet 7 carries the device key).
-5. Collects BLE notification packets for ~15 seconds (with keepalive writes every
-   10 s to prevent the device from dropping the connection).
-6. Disconnects and updates all sensor entities with the collected data.
+### Continuous mode (default)
 
-If the device makes a "cold-probe" drop (disconnects in <400 ms — normal BLE
-behaviour) the coordinator retries automatically.
+Holds a persistent BLE connection:
 
-If a poll fails entirely, entities **retain their last known values** for up to
-10 minutes before going unavailable. This prevents flickering from transient
-BLE issues.
+1. HA's Bluetooth scanner finds the `TT` advertisement.
+2. Connects and waits ~1.8 s (matching the Android GATT timing the device expects).
+3. Subscribes to notifications and sends the 11-packet init sequence (packet 7 carries the device key).
+4. Sends **Cmd2 settings queries** to read current values for supported DPIDs
+   (screen timeout, standby timeouts, breath light, silent mode, etc.).
+5. Stays connected, receiving continuous telemetry (Cmd1) packets ~1/second.
+6. Sends keepalive packets every 10 s to prevent the device from dropping the session.
+7. Automatically reconnects on disconnect.
 
-> **Note:** The device only supports **one BLE connection at a time.** While the
-> integration is actively polling (~15 s per minute), the Cleanergy app cannot
-> connect. Conversely, if you have the app open, the integration's poll that
-> minute will fail and fall back to cached values. Close the app when you don't
-> need it to let HA poll freely.
+### Polled mode
+
+Connects periodically (configurable interval, default 30 s):
+
+1. Connects, initializes, sends settings queries, collects telemetry for ~15 s.
+2. Disconnects and updates entities.
+3. Waits for the next poll interval.
+
+### BLE protocol overview
+
+The device uses three packet types:
+
+| Type | Direction | Purpose |
+|------|-----------|--------|
+| **Cmd1** (telemetry) | Device → HA | Continuous sensor data (battery %, power, temperature, etc.) |
+| **Cmd2** (query) | HA → Device | Request current setting values for specific DPIDs |
+| **Cmd3** (write/response) | Both | Write a setting value; device echoes confirmation |
+
+Telemetry uses standard TLV encoding (`[0x0A][length][attr][value…]`).
+Settings use compact TLV (`[length][attr][value…]`) — confirmed by
+`BleCmdResultBuildParser.getCmd2_3_10Result` in the Cleanergy APK.
+
+Packets are 20 bytes with multi-packet reassembly for larger payloads (byte 1
+low 7 bits = packet index, bit 7 = last flag, byte 19 = CRC-8 checksum).
+
+### Connection notes
+
+- If a poll or connection fails, entities **retain their last known values** for
+  a configurable period (default 15 minutes) before going unavailable.
+- Cold-probe drops (device disconnects in <400 ms) are retried automatically.
+- The device only supports **one BLE connection at a time.** Close the Cleanergy
+  app when HA is connected.
+- For devices far from the HA server, an **ESPHome Bluetooth Proxy** placed near
+  the device significantly improves reliability — especially for settings queries.
 
 ---
 
-## Changing the Poll Interval
+## Connection Options
 
-Edit `const.py` in the integration folder and change `UPDATE_INTERVAL` and/or
-`STALE_TIMEOUT`:
+All connection settings are configurable per device through the HA UI:
+**Settings → Devices & Services → OUPES Mega → Configure**
 
-```python
-UPDATE_INTERVAL = timedelta(seconds=30)   # default — how often to poll
-UPDATE_INTERVAL = timedelta(minutes=5)    # less frequent
+| Option | Default | Description |
+|--------|---------|-------------|
+| Continuous connection | On | Hold BLE connection open permanently vs. periodic polling |
+| Poll interval | 30 s | (Polled mode only) How often to reconnect and collect telemetry |
+| Stale timeout | 15 min | How long to keep last known values before marking entities unavailable |
+| Debug attr logging | Off | Log parsed attribute values to a CSV in the HA config directory |
+| Debug raw logging | Off | Log every raw BLE packet (hex) to a separate CSV |
 
-STALE_TIMEOUT = timedelta(minutes=10)     # default — grace period before unavailable
-STALE_TIMEOUT = timedelta(minutes=30)     # longer grace period
-```
-
-Restart HA after changing.
+Changes take effect immediately — no restart required.
 
 ---
 
@@ -216,6 +282,8 @@ Restart HA after changing.
 | Entities always Unavailable | BLE disabled on unit | Press the IoT button on the device to re-enable it (indicator flashes rapidly) |
 | "BLE device not found" in logs | HA hasn't scanned recently | Check Bluetooth integration is running |
 | Entities always Unavailable | App open on phone | The device only allows one BLE connection at a time — close the Cleanergy app and wait for the next poll |
+| Settings entities blank/unknown | Device too far from BLE adapter | Cmd2 settings queries are request-response; if the signal is weak, responses get lost. Move the device closer or use an ESPHome BLE proxy |
+| Settings entities blank/unknown | Frequent connection gaps | Enable debug raw logging and check for gaps >2 min — indicates BLE range issues |
 | "Cold-probe drop" repeated | BLE interference or device busy | Usually self-resolves on next poll |
 | Setup fails with ConfigEntryNotReady | Device not reachable at startup | HA will retry — power on the device |
 
