@@ -601,6 +601,8 @@ captures and confirmed live against hardware.
 **Prerequisite — factory reset:** Press and hold the IoT button for **5 seconds**
 until the LED changes to rapid flashing. This clears the stored key and puts
 the device into pairing mode. Without this, the CLAIM sequence is rejected.
+After the reset the IoT module turns off — press the IoT button once to turn
+it back on before proceeding.
 
 All packets are **20 bytes**, with byte 19 = CRC-8/SMBUS (poly `0x07`, init `0x00`)
 over bytes 0–18.

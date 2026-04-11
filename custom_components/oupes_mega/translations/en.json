@@ -8,6 +8,7 @@
           "continuous_connection": "Continuous BLE connection",
           "poll_interval": "Poll interval (seconds)",
           "stale_timeout": "Stale timeout (minutes)",
+          "runtime_max_minutes": "Runtime noise filter (minutes)",
           "debug_attr_logging": "Debug: log all attribute values to CSV",
           "debug_raw_logging": "Debug: log raw BLE packets to CSV"
         },
@@ -16,6 +17,7 @@
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling every 30 seconds. Captures infrequent sensor updates (e.g. battery voltage) but blocks the official app from connecting at the same time.",
           "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
           "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
+          "runtime_max_minutes": "Maximum plausible runtime value in minutes. Firmware reports values above this as noise during charging or idle — they are silently dropped so sensors show Unknown instead. Default: 6000 (100 h). Increase if you have a large device stack capable of genuine runtimes over 100 h.",
           "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type (cmd1/cmd2_resp/cmd3_resp), packet index, and parsed values.",
           "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
         }
@@ -48,7 +50,7 @@
       },
       "create_key": {
         "title": "Create New Device Key",
-        "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.",
+        "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The IoT module (Wi-Fi/BLE) will turn off — **press the IoT button once to turn it back on**\n4. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.",
         "data": {
           "device_key": "Device Key (10 hex characters)"
         },
@@ -93,6 +95,7 @@
           "continuous_connection": "Continuous BLE connection (recommended)",
           "poll_interval": "Poll interval (seconds)",
           "stale_timeout": "Stale timeout (minutes)",
+          "runtime_max_minutes": "Runtime noise filter (minutes)",
           "debug_attr_logging": "Debug: log parsed attribute values to CSV",
           "debug_raw_logging": "Debug: log raw BLE packets to CSV"
         },
@@ -100,6 +103,7 @@
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling. Recommended for reliable sensor data. Prevents the official Cleanergy app from connecting at the same time.",
           "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
           "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
+          "runtime_max_minutes": "Maximum plausible runtime value in minutes. Firmware reports values above this as noise during charging or idle — they are silently dropped so sensors show Unknown instead. Default: 6000 (100 h). Increase if you have a large device stack capable of genuine runtimes over 100 h.",
           "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type, packet index, and parsed values.",
           "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
         }

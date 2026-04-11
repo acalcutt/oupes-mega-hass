@@ -1,7 +1,7 @@
 """Sensor entities for the OUPES Mega integration."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable
 
@@ -14,7 +14,6 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
-    UnitOfElectricPotential,
     UnitOfPower,
     UnitOfTemperature,
     UnitOfTime,
@@ -27,6 +26,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import OUPESMegaCoordinator
 from .protocol import ATTR_MAP
+from .const import series_from_product_id
 
 
 def _device_info(coordinator: OUPESMegaCoordinator) -> DeviceInfo:
@@ -160,6 +160,15 @@ SENSOR_DESCRIPTIONS: tuple[OUPESSensorDescription, ...] = (
     ),
 )
 
+# ── Per-series display names for attr-6 (car port power) ────────────────────
+# Mirrors the naming used by the car port output switch — same port, same label.
+_CAR_PORT_POWER_NAMES: dict[str, str] = {
+    "mega_1":   "Car Port Power",
+    "mega":     "Car & 12V Power",
+    "guardian": "Car & 12V Power",
+}
+
+
 # ── Battery module sensors (created dynamically per slot) ────────────────────
 # Attr 101 carries the slot index; attrs 78/79/80/53/54 carry the per-slot
 # values. Entities are added the first time each slot number appears in
@@ -193,24 +202,9 @@ def _slot_descriptions(slot: int) -> list[OUPESSensorDescription]:
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement=UnitOfTime.MINUTES,
             icon="mdi:timer-outline",
-            # Reads from the coordinator's persistent 'last_runtime_min' key so the
-            # last known runtime is held when attr 78 is in voltage-range (≥44000).
-        ),
-        OUPESSensorDescription(
-            key=f"ext_battery_{slot}_voltage",
-            attr=78,
-            data_key="last_voltage_mv",
-            slot=slot,
-            name=f"{display_name} Voltage",
-            device_class=SensorDeviceClass.VOLTAGE,
-            state_class=SensorStateClass.MEASUREMENT,
-            native_unit_of_measurement=UnitOfElectricPotential.VOLT,
-            # Reads from the coordinator's persistent 'last_voltage_mv' key so the
-            # last known voltage is held until a newer reading arrives.
-            # NOTE: on current Mega 1 firmware, only slot 2 broadcasts voltage
-            # readings in attr 78; slot 1 never does. The entity is marked
-            # Unavailable (not Unknown) when no reading has ever arrived.
-            value_fn=lambda v: round(v / 1000, 3),
+            # Only stores real runtime values; the 99h sentinel (5940 min) that
+            # the firmware emits when charging/idle is filtered out in the
+            # coordinator, so this sensor goes Unknown when not discharging.
         ),
         OUPESSensorDescription(
             key=f"ext_battery_{slot}_temp",
@@ -286,10 +280,6 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
             slot_data = self.coordinator.data["ext_batteries"].get(desc.slot)
             if not slot_data:
                 return False  # slot never seen
-            # Voltage entity requires a historical reading; without one it is
-            # Unavailable (not Unknown) so the user knows it is unsupported.
-            if desc.data_key == "last_voltage_mv" and "last_voltage_mv" not in slot_data:
-                return False
             return True
         return True
 
@@ -321,10 +311,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up OUPES Mega sensor entities."""
     coordinator: OUPESMegaCoordinator = hass.data[DOMAIN][entry.entry_id]
+    series = series_from_product_id(coordinator.product_id)
+
+    def _resolve(desc: OUPESSensorDescription) -> OUPESSensorDescription:
+        if desc.key == "dc_12v_output" and series in _CAR_PORT_POWER_NAMES:
+            return replace(desc, name=_CAR_PORT_POWER_NAMES[series])
+        return desc
 
     # Add main device sensors immediately.
     async_add_entities(
-        OUPESMegaSensor(coordinator, desc, entry)
+        OUPESMegaSensor(coordinator, _resolve(desc), entry)
         for desc in SENSOR_DESCRIPTIONS
     )
 

@@ -13,7 +13,7 @@ toggle switches, and writable device settings — all with no cloud dependency.
 | Home Assistant | 2023.6 or later (Python 3.11+) |
 | HA `bluetooth` integration | Built-in — must be enabled and working |
 | USB Bluetooth adapter | Plug into your HA server if it has no built-in BT |
-| OUPES power station | Any supported model (see below). Power on, BLE enabled — press the IoT button on the unit to enable it (indicator flashes rapidly); the setting persists after that. Hold for 5 s to factory-reset the BLE pairing. |
+| OUPES power station | Any supported model (see below). Power on, BLE enabled — press the IoT button on the unit to enable it (indicator flashes rapidly when ready, goes solid when a BLE connection is active); the setting persists after that. Hold for 5 s to factory-reset the BLE pairing. |
 
 ### Supported Models
 
@@ -89,9 +89,11 @@ dependency. This replicates the Cleanergy app's pairing protocol.
 1. **Factory-reset the device first:** Press and hold the IoT button for
    **5 seconds** until the indicator light changes to rapid flashing. This
    clears the stored pairing key and puts the device into pairing mode.
-2. A random 10-hex-character key is pre-filled (you can change it).
-3. Click **Submit** — a progress spinner appears while pairing runs (~20 s).
-4. When pairing completes, the integration is ready.
+2. **Re-enable the IoT module:** After the reset the IoT module turns off —
+   press the IoT button once to turn it back on (indicator flashes rapidly).
+3. A random 10-hex-character key is pre-filled (you can change it).
+4. Click **Submit** — a progress spinner appears while pairing runs (~20 s).
+5. When pairing completes, the integration is ready.
 
 > This is the best option if you're setting up from scratch, taking ownership
 > of a used unit, or don't want to use the Cleanergy cloud at all.
@@ -250,7 +252,9 @@ low 7 bits = packet index, bit 7 = last flag, byte 19 = CRC-8 checksum).
   a configurable period (default 15 minutes) before going unavailable.
 - Cold-probe drops (device disconnects in <400 ms) are retried automatically.
 - The device only supports **one BLE connection at a time.** Close the Cleanergy
-  app when HA is connected.
+  app when HA is connected. The IoT indicator goes **solid** while a connection
+  is active — if it’s solid and HA isn’t connected, the Cleanergy app (or
+  another device) is holding the connection.
 - For devices far from the HA server, an **ESPHome Bluetooth Proxy** placed near
   the device significantly improves reliability — especially for settings queries.
 
@@ -278,9 +282,9 @@ Changes take effect immediately — no restart required.
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | Entities always Unavailable | Device out of range or off | Check device is on and in range |
-| Entities always Unavailable | BLE disabled on unit | Press the IoT button on the device to re-enable it (indicator flashes rapidly) |
+| Entities always Unavailable | BLE disabled on unit | Press the IoT button on the device to re-enable it (indicator flashes rapidly when ready, solid when connected) |
 | "BLE device not found" in logs | HA hasn't scanned recently | Check Bluetooth integration is running |
-| Entities always Unavailable | App open on phone | The device only allows one BLE connection at a time — close the Cleanergy app and wait for the next poll |
+| Entities always Unavailable | App open on phone | The device only allows one BLE connection at a time — close the Cleanergy app and wait for the next poll. If the IoT indicator is solid but HA isn’t polling, another device is holding the connection. |
 | Settings entities blank/unknown | Device too far from BLE adapter | Cmd2 settings queries are request-response; if the signal is weak, responses get lost. Move the device closer or use an ESPHome BLE proxy |
 | Settings entities blank/unknown | Frequent connection gaps | Enable debug raw logging and check for gaps >2 min — indicates BLE range issues |
 | "Cold-probe drop" repeated | BLE interference or device busy | Usually self-resolves on next poll |

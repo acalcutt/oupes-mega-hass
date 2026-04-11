@@ -17,9 +17,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    ATTR78_MV_MAX,
-    ATTR78_MV_MIN,
     ATTR78_RUNTIME_MAX,
+    ATTR78_RUNTIME_SENTINEL,
     DOMAIN,
     MAX_ATTEMPTS,
     SCAN_DURATION,
@@ -77,6 +76,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         stale_timeout_minutes: int = 15,
         debug_attrs: bool = False,
         debug_raw: bool = False,
+        runtime_max_minutes: int = ATTR78_RUNTIME_MAX,
     ) -> None:
         effective_interval = timedelta(seconds=poll_interval_seconds)
         super().__init__(
@@ -105,6 +105,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         )
         self._debug_attrs = debug_attrs
         self._debug_raw = debug_raw
+        self._runtime_max_minutes = runtime_max_minutes
         self._attr_csv_path: Path | None = None
         self._raw_csv_path: Path | None = None
         if debug_attrs or debug_raw:
@@ -195,19 +196,13 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             for attr, val in parsed.items():
                 known = attr in self._KNOWN_ATTRS
                 note = ""
-                # Flag attr-78 middle-range mystery values
-                if attr == 78 and ATTR78_RUNTIME_MAX < val < ATTR78_MV_MIN:
-                    note = f"attr78_mystery (not runtime, not voltage)"
-                    _LOGGER.warning(
-                        "OUPES attr 78 mystery value: slot=%d val=%d (not runtime ≤%d, "
-                        "not voltage %d–%d) SoC=%d%% grid=%dW",
-                        slot, val, ATTR78_RUNTIME_MAX,
-                        ATTR78_MV_MIN, ATTR78_MV_MAX, soc, grid_w,
-                    )
-                elif attr == 78 and ATTR78_MV_MIN <= val <= ATTR78_MV_MAX:
-                    note = f"attr78_voltage {val/1000:.3f}V"
-                elif attr == 78:
-                    note = f"attr78_runtime {val}min"
+                if attr == 78:
+                    if val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
+                        note = f"attr78_runtime {val}min"
+                    elif val == ATTR78_RUNTIME_SENTINEL:
+                        note = "attr78_sentinel (99h placeholder, not discharging)"
+                    else:
+                        note = f"attr78_other {val}"
                 elif not known:
                     note = "unknown_attr"
                 rows.append([
@@ -365,13 +360,11 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             for attr, val in parsed.items():
                 if attr in EXT_BATTERY_ATTRS:
                     ext_batteries[current_slot][attr] = val
-                    if attr == 78 and ATTR78_MV_MIN <= val <= ATTR78_MV_MAX:
-                        ext_batteries[current_slot]["last_voltage_mv"] = val
-                    if attr == 78 and val <= ATTR78_RUNTIME_MAX:
+                    if attr == 78 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
                         ext_batteries[current_slot]["last_runtime_min"] = val
                 elif attr != 101:
                     attrs[attr] = val
-                    if attr == 30:
+                    if attr == 30 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
                         attrs["last_runtime_min"] = val
 
         def _flush_pkt_buf() -> None:
@@ -588,13 +581,11 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             for attr, val in parsed.items():
                 if attr in EXT_BATTERY_ATTRS:
                     ext_batteries[current_slot][attr] = val
-                    if attr == 78 and ATTR78_MV_MIN <= val <= ATTR78_MV_MAX:
-                        ext_batteries[current_slot]["last_voltage_mv"] = val
-                    if attr == 78 and val <= ATTR78_RUNTIME_MAX:
+                    if attr == 78 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
                         ext_batteries[current_slot]["last_runtime_min"] = val
                 elif attr != 101:
                     attrs[attr] = val
-                    if attr == 30:
+                    if attr == 30 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
                         attrs["last_runtime_min"] = val
 
         def _flush_pkt_buf() -> None:

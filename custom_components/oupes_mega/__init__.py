@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .const import (
+    ATTR78_RUNTIME_MAX,
     CONF_ADDRESS,
     CONF_CONTINUOUS,
     CONF_DEBUG_ATTRS,
@@ -18,6 +19,7 @@ from .const import (
     CONF_NAME,
     CONF_POLL_INTERVAL,
     CONF_PRODUCT_ID,
+    CONF_RUNTIME_MAX,
     CONF_STALE_TIMEOUT,
     DOMAIN,
     STALE_TIMEOUT,
@@ -44,6 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     stale_timeout: int = entry.options.get(
         CONF_STALE_TIMEOUT, int(STALE_TIMEOUT.total_seconds() // 60)
     )
+    runtime_max: int = entry.options.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX)
     device_key: str = (
         entry.options.get(CONF_DEVICE_KEY)
         or entry.data.get(CONF_DEVICE_KEY)
@@ -64,6 +67,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         stale_timeout_minutes=stale_timeout,
         debug_attrs=debug_attrs,
         debug_raw=debug_raw,
+        runtime_max_minutes=runtime_max,
     )
 
     # Perform the first refresh; raises ConfigEntryNotReady if the device

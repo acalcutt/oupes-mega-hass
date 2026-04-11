@@ -36,6 +36,7 @@ from homeassistant.helpers.selector import (
 from .ble_pairing import PairingResult, async_pair_device
 from .cloud_api import async_cloud_login, async_fetch_device_key
 from .const import (
+    ATTR78_RUNTIME_MAX,
     CONF_ADDRESS,
     CONF_CONTINUOUS,
     CONF_DEBUG_ATTRS,
@@ -45,6 +46,7 @@ from .const import (
     CONF_NAME,
     CONF_POLL_INTERVAL,
     CONF_PRODUCT_ID,
+    CONF_RUNTIME_MAX,
     CONF_STALE_TIMEOUT,
     DOMAIN,
     STALE_TIMEOUT,
@@ -443,6 +445,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             stale_timeout = int(user_input.get(
                 CONF_STALE_TIMEOUT, STALE_TIMEOUT.total_seconds() // 60
             ))
+            runtime_max = int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX))
             debug_attrs = user_input.get(CONF_DEBUG_ATTRS, False)
             debug_raw = user_input.get(CONF_DEBUG_RAW, False)
             await self.async_set_unique_id(self._address)
@@ -460,6 +463,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_CONTINUOUS: continuous,
                     CONF_POLL_INTERVAL: poll_interval,
                     CONF_STALE_TIMEOUT: stale_timeout,
+                    CONF_RUNTIME_MAX: runtime_max,
                     CONF_DEBUG_ATTRS: debug_attrs,
                     CONF_DEBUG_RAW: debug_raw,
                 },
@@ -483,6 +487,12 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_STALE_TIMEOUT, default=default_stale,
                     ): NumberSelector(NumberSelectorConfig(
                         min=1, max=120, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
+                    vol.Optional(
+                        CONF_RUNTIME_MAX, default=ATTR78_RUNTIME_MAX,
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
                         unit_of_measurement="minutes",
                     )),
                     vol.Required(CONF_DEBUG_ATTRS, default=False): bool,
@@ -575,6 +585,13 @@ class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
                         default=self._entry.options.get(CONF_STALE_TIMEOUT, default_stale),
                     ): NumberSelector(NumberSelectorConfig(
                         min=1, max=120, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
+                    vol.Optional(
+                        CONF_RUNTIME_MAX,
+                        default=self._entry.options.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
                         unit_of_measurement="minutes",
                     )),
                     vol.Required(
