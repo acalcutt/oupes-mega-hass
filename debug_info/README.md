@@ -907,7 +907,7 @@ Confidence levels: ✅ Confirmed against app display | ⚠️ Likely but unverif
 | `0x50` | 80 | **External Battery Temperature** (slot-indexed by attr 101) | ÷10 = °F (e.g. 878 → 87.8 °F) | ✅ Confirmed vs app temperature display |
 | `0x54` | 84 | AC output control (**write only**) | `1` = on, `0` = off — device never broadcasts this attr back; actual AC state is read from attr 1 bit 0 | ⚠️ Observed in app control capture; never received in BLE notifications |
 | `0x65` | 101 | Battery slot index | `1` or `2` (or higher with multiple B2 batteries) — identifies which connected expansion battery attrs 78/79/80 belong to in a given packet | ✅ |
-| `0x69` | 105 | **AC Inverter Protection** (thermal/overcurrent flag) | `1` = protection active (~60s after hard trip, or during elevated-temp warning); `0` = normal | ✅ Goes `1` during 8–10 min thermal recovery; confirmed via btsnoop timestamps |
+| `0x69` | 105 | **Charge Mode** | `0` = Slow charge, `1` = Fast charge (default/pre-seed). Writable via Cmd3. Confirmed from `S2_V2SettingFragment` and `D2SettingFragment` in the APK. Applied universally across Mega 1/2/3/5 and Guardian series. The earlier "AC Inverter Protection" interpretation was incorrect — that was based on correlating a `1` reading with thermal events on the Mega 1, but the value is simply the charge mode state. | ✅ Confirmed from APK source; Mega 1 observed `1` at rest = Fast mode default |
 
 > **Note:** The main unit temperature is attr 32 (÷10 = °F, confirmed fixed in °F regardless of app unit setting — btsnoop across F→C→F app switch confirmed raw value does not change). The main unit remaining runtime is attr 30 (minutes; **sentinel values in the tens of thousands at 100% SoC** — observed values include 39,689 and 46,956; normal max during charge/discharge is 5,940). Attr 79 is direct battery % (raw value = %, confirmed: raw 15 = 15% observed during charging; bounces rapidly between 99 and 100 at the SoC=100% boundary due to ADC noise). Attr 80 is battery module temperature ÷10 in °F, confirmed against app display.
 
@@ -933,7 +933,7 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 | Battery runtime (slot 1, 2, …) | Minutes (0–6000; >6000 = 100% SoC sentinel) | attr 78 (runtime range) + slot from attr 101 ✅ |
 | Battery voltage (slot 2 only on Mega 1) | mV ÷ 1000 = V (e.g. 46310 → 46.310 V) | attr 78 (voltage range 44000–61000) + slot from attr 101 ✅ |
 | Battery temperature (slot 1, 2, …) | ÷10 °F (e.g. 878 → 87.8 °F) | attr 80 + slot from attr 101 ✅ |
-| AC inverter protection active | boolean | attr 105 ✅ |
+| Charge Mode (0=Slow, 1=Fast) | boolean | attr 105 ✅ (APK confirmed; pre-seed = 1) |
 
 > The app also shows "Grid" and "Solar" as separate input sources on the flow diagram screen, suggesting there may be distinct attrs for each not yet fully identified.
 
@@ -1241,11 +1241,11 @@ Because the firmware update protocol relies on unencrypted HTTP URLs and has no 
 ## Notes & Unknowns
 
 - **Attr 30 = main unit remaining runtime in minutes.** Values are inaccurate under variable load. Goes **above 6000** specifically at 100% SoC (float-charge sentinel) — treat any value >6000 as "fully charged". Normal max during charge/discharge cycle is 5940.
-- **Attr 32 = main unit temperature ÷10 in °F.** Confirmed: raw ~960 at idle = ~96 °F, consistent with app display. The earlier "probably °C" hypothesis was wrong — 96 °F is a perfectly reasonable idle temperature for the inverter internals. Temperature reports in discrete firmware steps (e.g. 956=95.6°F, 949=94.9°F, 942=94.2°F, 935=93.5°F, 928=92.8°F); during sustained 500W discharge the reading pegged at 956 for several hours then stepped down gradually as the ambient cooled. The AC inverter protection threshold (attr 105) was not triggered at 95.6°F but was triggered in a prior session that reached raw 970 = 97.0°F — the protection threshold is somewhere in between.
+- **Attr 32 = main unit temperature ÷10 in °F.** Confirmed: raw ~960 at idle = ~96 °F, consistent with app display. The earlier "probably °C" hypothesis was wrong — 96 °F is a perfectly reasonable idle temperature for the inverter internals. Temperature reports in discrete firmware steps (e.g. 956=95.6°F, 949=94.9°F, 942=94.2°F, 935=93.5°F, 928=92.8°F); during sustained 500W discharge the reading pegged at 956 for several hours then stepped down gradually as the ambient cooled.
 - **Attr 78 = per-slot multiplexed field (slot-indexed by attr 101).** Three value ranges carry distinct data: runtime in minutes (≤6000; 5940 = normal max during charge/discharge), voltage in mV (44000–61000; ÷1000 = V; fast-charge peak up to 60.050 V, float-charge up to 57.3 V), and a live float-charge measurement (6001–43999; continuously emitted at SoC=100% with grid on — see Notes). On current Mega 1 firmware, only slot 2 broadcasts voltage readings in attr 78; slot 1 does not — confirmed in 19-hour log: slot 1 had zero readings ≥44000 mV across 28,000+ observations while slot 2 had 1,242 voltage readings. The Voltage entity for slot 1 shows Unavailable.
 - **Attr 79 = External Battery Charge (direct percentage).** Raw value = battery %; confirmed raw 15 = 15% observed during charging; raw 0 = 0% confirmed at end of full discharge-to-zero session. The integration reports this as-is with no scaling.
 - **Attr 80 = External Battery Temperature ÷10 in °F.** Confirmed against app temperature display (e.g. raw 878 → 87.8 °F). The earlier "section voltage" assumption was incorrect.
-- **Attr 105 = AC Inverter Protection flag.** Goes `1` approximately 60 seconds after the AC output is hardware-tripped (overcurrent or thermal) and remains `1` during the 8–10 minute thermal recovery window. Also activates during elevated-temperature normal operation as a thermal warning without a hard trip. Goes `0` once the device recovers. **Confirmed NOT voltage-triggered:** a complete deep-discharge session (97%→0% SoC; BLE logging gap from 15%→0% during which the device ran unmonitored for ~2h43min) produced zero attr 105 events throughout. At the moment SoC=0% was first logged, attr 4=500W and attr 5=506W — the device was still actively outputting ~500W with all outputs on (attr 1=7) and attr 105=0. Peak temperature was 95.6°F (raw 956) across this entire run — no protection triggered. Earlier sessions that did trigger protection (raw attr 32 rising to 970 = 97.0°F) were almost certainly thermal: the device was in a warmer environment or enclosure. The protection threshold lies somewhere above 95.6°F / 35.3°C.
+- **Attr 105 = Charge Mode (0 = Slow, 1 = Fast).** Writable via Cmd3; the HA integration exposes it as a "Fast Charge" switch on all Mega and Guardian series. The device default / pre-seed state is `1` (Fast). The earlier interpretation as an "AC Inverter Protection flag" on the Mega 1 was incorrect — correlating `1` readings with thermal events was coincidental since Fast mode is the default and the device was almost always in Fast mode during testing. **Confirmed:** APK source (`S2_V2SettingFragment`, `D2SettingFragment`) shows DPID 105 as the charge mode selection across all D2/S2 model families. Pre-condition for toggling: AC output must be off and AC input power = 0W (enforced in the HA integration via `HomeAssistantError`). a complete deep-discharge session (97%→0% SoC; BLE logging gap from 15%→0% during which the device ran unmonitored for ~2h43min) produced zero attr 105 events throughout. At the moment SoC=0% was first logged, attr 4=500W and attr 5=506W — the device was still actively outputting ~500W with all outputs on (attr 1=7) and attr 105=0. Peak temperature was 95.6°F (raw 956) across this entire run — no protection triggered. Earlier sessions that did trigger protection (raw attr 32 rising to 970 = 97.0°F) were almost certainly thermal: the device was in a warmer environment or enclosure. The protection threshold lies somewhere above 95.6°F / 35.3°C.
 - **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input. The 1W difference is the MPPT noise floor from attr 23 — confirmed to appear in the official app even with no panel connected, and confirmed in live CSV data (attr 23 = 1 during grid-on periods, 0 when grid is off). The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading. **Confirmed: attr 21 is a system-wide total that includes solar power entering connected B2 expansion batteries via their secondary MPPT ports.** 19-hour log (2026-04-05 23:42 – 2026-04-06 18:54) confirms this definitively at the 14:04–14:30 window: AC disconnected at 14:05 (attr 22 → 0); chain cable remained physically connected — attr 54 slot 2 briefly showed ~104W as the B2 chain-discharged into the Mega during the AC-off handover, then naturally dropped to 0 at ~14:07 as the solar MPPT took over. Attr 53 slot 2 and attr 21 then tracked each other in per-minute lockstep: 14:08: 7W, 14:09: 9W, 14:10: 31W, 14:11: 42W, 14:12: 50W, 14:13: 58W, 14:14: 93W, 14:15: 103W, stable ~102–107W until 14:30 when both simultaneously dropped to 0. Attr 22 and attr 23 remained 0 throughout the solar ramp. Attr 53 slot 1 = 0 throughout — slot 1 has no solar panel. Notable: attr 23 (main unit solar input) stayed 0 throughout — B2 secondary-port solar does NOT appear in attr 23; it only rolls up into attr 21 directly.
 - **Solar port and attr 23 testing used a DC battery source,** not a real solar panel (no panel available). The port accepted DC input from the battery correctly; attr 23 reflected the input wattage as expected. Attr 23 = 1 (noise floor) is common during grid-on periods with nothing connected — this matches what the official app displays.
 - **Cloud connection is BLE-dependent.** The device only connects to the cloud broker while a phone is actively BLE-paired via the Cleanergy app. With no BLE connection, all publish requests return `num=0`. This was confirmed by the official app experiencing the same failure simultaneously. **This makes the WiFi/cloud path unsuitable for unattended Home Assistant integration.**
@@ -1414,10 +1414,11 @@ idle output or entering sleep mode.
 |------|-------------------|---------|------|
 | 106 | `acChargingPowerMax` | **AC charger max power** | Watts |
 
-> **Note:** DPID 105 is the **AC inverter protection** read-only flag (0/1,
-> indicates thermal/overcurrent protection active). DPID 106 is the **writable**
-> AC charging power max setting. The APK's `D2AcChargerPowerFragment` queries
-> both (`BleBean(new int[]{105, 106}, null)`) and writes only DPID 106.
+> **Note:** DPID 105 is the **Charge Mode** setting (0 = Slow charge, 1 = Fast
+> charge), writable via Cmd3 on all Mega and Guardian series. Default/pre-seed
+> is `1` (Fast). Confirmed from the APK's `S2_V2SettingFragment` and
+> `D2SettingFragment`. The earlier "AC inverter protection" label was a
+> misinterpretation. DPID 106 is the **writable** AC charging power max setting.
 
 #### Scheduled Tasks (D2/D5 models only)
 
@@ -1454,20 +1455,22 @@ idle output or entering sleep mode.
 **Currently implemented:** Only the output bitmask (attr 1) is writable — AC,
 DC 12V, and USB output on/off via `build_output_command()`.
 
+**Currently implemented:** AC/DC 12V/USB output switches (attr 1 bitmask), silent
+mode (63), AC ECO (110), DC ECO (112), breath light (58), charge mode (105).
+
 **Not yet implemented (candidates for new HA entities):**
 
 | Priority | DPIDs | Entity Type | Rationale |
 |----------|-------|-------------|-----------|
-| High | 47, 48, 49 | `number` (seconds) | USB/XT90/AC standby timeouts — most commonly adjusted |
+| High | 47, 49 | `number` (seconds) | USB+Car/AC standby timeouts — most commonly adjusted |
+| High | 48 | `number` (seconds) | XT90 standby timeout — Guardian/HP2500 only |
 | High | 45 | `number` (seconds) | Machine standby timeout — prevents unexpected sleep |
-| High | 10, 17 | `switch` | AC/DC ECO mode on/off |
-| High | 11, 18 | `number` (watts) | AC/DC ECO power thresholds |
-| Medium | 7 | `switch` | Silent mode |
-| Medium | 32 | `switch` | Breath light on/off |
-| Medium | 8 | `switch` | Night mode |
-| Low | 33 | `select` | 50/60 Hz frequency |
-| Low | 31 | `switch` | Bluetooth on/off |
+| High | 111, 113 | `number` (watts) | AC/DC ECO power thresholds (Exodus series) |
+| Medium | 64 | `switch` | Night mode |
+| Low | 61 | `select` | 50/60 Hz frequency |
+| Low | 62 | `switch` | Bluetooth on/off |
 | Low | 224 | `switch` | Energy management / memory function |
+| Low | 12 | `number` (V) | Anderson/XT90 output voltage setpoint (Mega 2/3/5 + Guardian) |
 
 ---
 
@@ -1485,7 +1488,7 @@ used to auto-detect device capabilities and adjust available entities per model.
 
 | Product ID | Model | Series | Notes |
 |------------|-------|--------|-------|
-| `O44A5o` | **MEGA 1** | Mega | Currently tested, confirmed working |
+| `O44A5o` | **MEGA 1** | `mega_1` | Currently tested, confirmed working. Separate series from Mega 2/3/5 due to different bit2 port assignment (USB-only vs Anderson+USB) |
 | `YRWj81` | **MEGA 2** | Mega | Planned for testing |
 | `EFDayi` | **MEGA 3** | Mega | |
 | `JTEnK3` | **MEGA 5** | Mega | |
@@ -1523,8 +1526,12 @@ range. Key differences between models are likely:
   Conversely, UPS models have alarm-specific DPIDs not present on power stations.
 - **Telemetry attributes:** The core attrs (1–9, 21–23, 30, 32, 51, 78–80, 101,
   105) are likely universal. Higher attrs may differ per model.
-- **Output bitmask:** The attr 1 bit assignments (AC=0x01, DC12V=0x02, USB=0x04)
-  may differ on models with different port configurations.
+- **Output bitmask:** The attr 1 bit assignments differ by series (confirmed from
+  APK `dcXt90Switch`/`dcUsbCarSwitch`/`dcUsbSwitch` in the respective Detail fragments):
+  - **Mega 1** (`mega_1`): bit0=AC, bit1=Car port only, bit2=USB only
+  - **Mega 2/3/5** (`mega`): bit0=AC, bit1=Car+12V barrel jacks (combined), bit2=Anderson+USB (combined)
+  - **Guardian/HP2500** (`guardian`): bit0=AC, bit1=Car+12V (combined), bit2=XT90 output
+  - **Exodus/LP/other**: bit0=AC, bit1=Car port, bit2=USB (assumed same as Mega 1; no Anderson/XT90)
 - **Battery module count:** Models without expansion battery support won't have
   slot-indexed attrs.
 

@@ -22,9 +22,10 @@ applies model-specific feature sets (settings, entity availability) automaticall
 
 | Series | Models | Settings |
 |--------|--------|----------|
-| **Mega** | Mega 1, Mega 2, Mega 3, Mega 5 | Screen timeout, machine/WiFi/USB-car/XT90/AC standby timeouts, breath light, silent mode, charge mode |
+| **Mega 1** | Mega 1 | Screen timeout, machine/WiFi/USB-car/AC standby timeouts, breath light, silent mode, charge mode |
+| **Mega 2/3/5** | Mega 2, Mega 3, Mega 5 | Same as Mega 1, plus Car & 12V standby timeout |
 | **Exodus** | Exodus 1200, Exodus 1500, Exodus 2400, S024 Lite, S1 Lite | Screen timeout, breath light, silent mode, charge mode, AC/DC ECO modes + thresholds |
-| **Guardian** | Guardian 6000, HP2500, D5 V2 | Same as Mega (assumed) |
+| **Guardian** | Guardian 6000, HP2500, D5 V2 | Same as Mega 2/3/5, plus XT90 standby timeout |
 | **Other** | S2 V2, DC 800, LP350, LP700, PB300, UPS 1200, UPS 1800 | Subset of settings per model |
 
 Unrecognised product IDs get a conservative safe set of settings.
@@ -157,10 +158,8 @@ retrieved key is saved.
 | Entity | Attr | Notes |
 |--------|------|-------|
 | AC Output | 1 (bit 0) | AC outlets enabled |
-| DC 12V Output | 1 (bit 1) | 12 V cigarette lighter enabled |
-| USB Output | 1 (bit 2) | USB-A and USB-C ports enabled |
-| AC Output Control | 84 | |
-| Charge Mode | 105 | 1 = Fast Charge (factory default), 0 = Slow Charge |
+| Car Port / Car & 12V Output | 1 (bit 1) | Name depends on model: "Car Port" on Mega 1; "Car & 12V Output" on Mega 2/3/5 and Guardian |
+| USB Output / Anderson & USB Output / XT90 Output | 1 (bit 2) | Name depends on model: "USB Output" on Mega 1; "Anderson & USB Output" on Mega 2/3/5; "XT90 Output" on Guardian |
 
 ### Switches (toggleable)
 
@@ -169,8 +168,8 @@ retrieved key is saved.
 | Entity | Notes |
 |--------|-------|
 | AC Output | Turns the AC inverter output on or off |
-| DC 12V Output | Turns the 12 V cigarette-lighter port on or off |
-| USB Output | Turns the combined USB-A / USB-C output on or off |
+| Car Port / Car & 12V Output | Turns the car port (and 12V barrel jacks on Mega 2/3/5+) on or off. Name varies by model. |
+| USB Output / Anderson & USB Output / XT90 Output | Turns USB ports on Mega 1, Anderson+USB on Mega 2/3/5, or XT90 on Guardian on or off. Name varies by model. |
 
 **Setting switches** (Cmd3 DPID write — filtered by model series):
 

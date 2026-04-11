@@ -1,7 +1,7 @@
 """Binary sensor entities for boolean attributes on the OUPES Mega."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from homeassistant.components.binary_sensor import (
@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, series_from_product_id
 from .coordinator import OUPESMegaCoordinator
 from .sensor import _device_info
 
@@ -26,29 +26,48 @@ class OUPESBinarySensorDescription(BinarySensorEntityDescription):
     bit_mask: int = 0  # if non-zero, check this specific bit of the attr value
 
 
+# attr 1 switchValue bitmask layout (from APK dcXt90Switch / dcUsbCarSwitch / acSwitch):
+#   bit0 (0x01) = AC output (all series)
+#   bit1 (0x02) = Car/DC output  ← Mega 1: car port only; Mega 2/3/5 + Guardian: car + 12V barrel jacks
+#   bit2 (0x04) = USB/Anderson/XT90  ← Mega 1: USB only; Mega 2/3/5: Anderson+USB grouped; Guardian: XT90
+# Names are resolved per-series in async_setup_entry via _DC_OUTPUT_NAMES / _USB_OUTPUT_NAMES.
 BINARY_SENSOR_DESCRIPTIONS: tuple[OUPESBinarySensorDescription, ...] = (
     OUPESBinarySensorDescription(
         key="ac_output",
         attr=1,
-        bit_mask=0x01,  # attr 1 is a bitmask: bit0=AC, bit1=DC(12V), bit2=USB
+        bit_mask=0x01,
         name="AC Output",
         icon="mdi:power-socket",
     ),
     OUPESBinarySensorDescription(
         key="dc_output",
         attr=1,
-        bit_mask=0x02,  # DC 12V cigarette lighter = bit 1 of attr 1
-        name="DC 12V Output",
+        bit_mask=0x02,
+        name="Car Port",        # overridden per series below
         icon="mdi:car-electric",
     ),
     OUPESBinarySensorDescription(
         key="usb_output",
         attr=1,
-        bit_mask=0x04,  # USB (A + C combined) = bit 2 of attr 1
-        name="USB Output",
+        bit_mask=0x04,
+        name="USB Output",      # overridden per series below
         icon="mdi:usb",
     ),
 )
+
+# Per-series display names for bit1 (Car/DC output group).
+_DC_OUTPUT_NAMES: dict[str, str] = {
+    "mega_1":   "Car Port",
+    "mega":     "Car & 12V Output",
+    "guardian": "Car & 12V Output",
+}
+
+# Per-series display names + icons for bit2 (USB / Anderson / XT90 output group).
+_USB_OUTPUT_NAMES: dict[str, tuple[str, str]] = {
+    "mega_1":   ("USB Output",           "mdi:usb"),
+    "mega":     ("Anderson & USB Output", "mdi:power-plug"),
+    "guardian": ("XT90 Output",           "mdi:ev-plug-chademo"),
+}
 
 
 class OUPESMegaBinarySensor(
@@ -100,7 +119,17 @@ async def async_setup_entry(
 ) -> None:
     """Set up OUPES Mega binary sensor entities."""
     coordinator: OUPESMegaCoordinator = hass.data[DOMAIN][entry.entry_id]
+    series = series_from_product_id(coordinator.product_id)
+
+    def _resolve(desc: OUPESBinarySensorDescription) -> OUPESBinarySensorDescription:
+        if desc.key == "dc_output" and series in _DC_OUTPUT_NAMES:
+            return replace(desc, name=_DC_OUTPUT_NAMES[series])
+        if desc.key == "usb_output" and series in _USB_OUTPUT_NAMES:
+            name, icon = _USB_OUTPUT_NAMES[series]
+            return replace(desc, name=name, icon=icon)
+        return desc
+
     async_add_entities(
-        OUPESMegaBinarySensor(coordinator, desc, entry)
+        OUPESMegaBinarySensor(coordinator, _resolve(desc), entry)
         for desc in BINARY_SENSOR_DESCRIPTIONS
     )

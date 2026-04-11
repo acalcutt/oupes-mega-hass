@@ -8,7 +8,7 @@ Two kinds of switch live here:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
@@ -52,16 +52,30 @@ SWITCH_DESCRIPTIONS: tuple[OUPESSwitchDescription, ...] = (
     OUPESSwitchDescription(
         key="dc12v_output_switch",
         bit=OUTPUT_DC12V_BIT,
-        name="DC 12V Output",
+        name="Car Port",        # overridden per series below
         icon="mdi:car-electric",
     ),
     OUPESSwitchDescription(
         key="usb_output_switch",
         bit=OUTPUT_USB_BIT,
-        name="USB Output",
+        name="USB Output",      # overridden per series below
         icon="mdi:usb",
     ),
 )
+
+# Per-series display names for bit1 (Car/DC output group).
+_DC_OUTPUT_NAMES: dict[str, str] = {
+    "mega_1":   "Car Port",
+    "mega":     "Car & 12V Output",
+    "guardian": "Car & 12V Output",
+}
+
+# Per-series display names + icons for bit2 (USB / Anderson / XT90 output group).
+_USB_OUTPUT_NAMES: dict[str, tuple[str, str]] = {
+    "mega_1":   ("USB Output",           "mdi:usb"),
+    "mega":     ("Anderson & USB Output", "mdi:power-plug"),
+    "guardian": ("XT90 Output",           "mdi:ev-plug-chademo"),
+}
 
 
 class OUPESMegaSwitch(CoordinatorEntity[OUPESMegaCoordinator], SwitchEntity):
@@ -259,15 +273,23 @@ async def async_setup_entry(
 ) -> None:
     """Set up OUPES Mega switch entities (output + setting switches)."""
     coordinator: OUPESMegaCoordinator = hass.data[DOMAIN][entry.entry_id]
+    series = series_from_product_id(coordinator.product_id)
+
+    def _resolve(desc: OUPESSwitchDescription) -> OUPESSwitchDescription:
+        if desc.key == "dc12v_output_switch" and series in _DC_OUTPUT_NAMES:
+            return replace(desc, name=_DC_OUTPUT_NAMES[series])
+        if desc.key == "usb_output_switch" and series in _USB_OUTPUT_NAMES:
+            name, icon = _USB_OUTPUT_NAMES[series]
+            return replace(desc, name=name, icon=icon)
+        return desc
 
     # Output switches are always available on all models.
     entities: list[SwitchEntity] = [
-        OUPESMegaSwitch(coordinator, desc, entry)
+        OUPESMegaSwitch(coordinator, _resolve(desc), entry)
         for desc in SWITCH_DESCRIPTIONS
     ]
 
     # Setting switches are filtered by the device's model series.
-    series = series_from_product_id(coordinator.product_id)
     supported_dpids = SERIES_SETTINGS.get(series, SERIES_SETTINGS["unknown"])
     entities.extend(
         OUPESSettingSwitch(coordinator, desc, entry)

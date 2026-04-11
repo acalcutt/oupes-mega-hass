@@ -56,7 +56,7 @@ ATTR78_MV_MAX       = 58500
 # Source: AppParams.java in Cleanergy APK v1.4.1.
 
 MODEL_CATALOG: dict[str, tuple[str, str]] = {
-    "O44A5o": ("Mega 1", "mega"),
+    "O44A5o": ("Mega 1", "mega_1"),
     "YRWj81": ("Mega 2", "mega"),
     "EFDayi": ("Mega 3", "mega"),
     "JTEnK3": ("Mega 5", "mega"),
@@ -102,17 +102,22 @@ def series_from_product_id(product_id: str | None) -> str:
 #   63 = silent mode, 110-113 = ECO mode (Exodus only).
 # "unknown" series gets a conservative safe set.
 
-# Mega series: settings exposed by S2_V2SettingFragment.  No ECO mode.
+# Mega series (1/2/3/5): settings exposed by S2_V2SettingFragment.  No ECO mode.
+# Anderson port on Mega units is a CHARGING INPUT only, not an XT90 output.
 _MEGA_SETTINGS: frozenset[int] = frozenset({
     41,   # screen/display timeout
     45,   # machine standby timeout
     46,   # WiFi standby timeout
     47,   # USB/car standby timeout
-    48,   # XT90 standby timeout
     49,   # AC standby timeout
     58,   # breath light
     63,   # silent mode
     105,  # charge mode (fast/slow)
+})
+
+# Guardian series: same as Mega but also has a physical XT90 DC output port.
+_GUARDIAN_SETTINGS: frozenset[int] = _MEGA_SETTINGS | frozenset({
+    48,   # XT90 standby timeout (Guardian has 12V/24V XT90 output; Mega does not)
 })
 
 # Exodus series: ECO mode visible in DeviceSettingFragment for Hr9Uhd/pba1j6/IDaSL8.
@@ -128,9 +133,14 @@ _EXODUS_SETTINGS: frozenset[int] = frozenset({
 })
 
 SERIES_SETTINGS: dict[str, frozenset[int]] = {
+    # mega_1 uses the same settings as mega but is a separate key so that
+    # binary_sensor.py / switch.py can give bit2 a different name:
+    #   mega_1 → "USB Output"  (bit2 is USB-A/C only, no Anderson port)
+    #   mega   → "Anderson & USB Output"  (bit2 controls Anderson+USB together)
+    "mega_1":   _MEGA_SETTINGS,
     "mega":     _MEGA_SETTINGS,
     "exodus":   _EXODUS_SETTINGS,
-    "guardian":  _MEGA_SETTINGS,  # assumed same as mega until tested
+    "guardian": _GUARDIAN_SETTINGS,
     "lp":       frozenset({41, 45, 47, 49, 58, 63}),  # no XT90, no ECO
     "portable": frozenset({41, 45, 47, 49, 58, 63}),
     "ups":      frozenset({41, 45, 49, 58, 63}),
