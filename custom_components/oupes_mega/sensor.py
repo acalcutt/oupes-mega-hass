@@ -24,9 +24,20 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, STALE_TIMEOUT
+from .const import DOMAIN
 from .coordinator import OUPESMegaCoordinator
 from .protocol import ATTR_MAP
+
+
+def _device_info(coordinator: OUPESMegaCoordinator) -> DeviceInfo:
+    """Build a DeviceInfo dict with dynamic model name from product_id."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, coordinator.address)},
+        name=coordinator.device_name,
+        manufacturer="OUPES",
+        model=coordinator.model_name,
+        connections={("bluetooth", coordinator.address)},
+    )
 
 
 # ── Entity description ────────────────────────────────────────────────────────
@@ -253,12 +264,7 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.address)},
-            name=coordinator.device_name,
-            manufacturer="OUPES",
-            model="Mega 1",
-        )
+        self._attr_device_info = _device_info(coordinator)
 
     @property
     def available(self) -> bool:
@@ -273,7 +279,7 @@ class OUPESMegaSensor(CoordinatorEntity[OUPESMegaCoordinator], SensorEntity):
         last = self.coordinator.last_successful_poll
         if last is None:
             return False  # never had a successful poll yet
-        if datetime.now() - last > STALE_TIMEOUT:
+        if datetime.now() - last > self.coordinator.stale_timeout:
             return False  # data is too old to be trustworthy
         desc = self.entity_description
         if desc.slot is not None:

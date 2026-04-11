@@ -1,7 +1,7 @@
 {
   "domain": "oupes_mega",
   "name": "OUPES Mega Power Station",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "codeowners": [],
   "config_flow": true,
   "dependencies": ["bluetooth"],

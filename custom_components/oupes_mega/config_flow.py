@@ -27,6 +27,11 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
 )
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
 from .ble_pairing import PairingResult, async_pair_device
 from .cloud_api import async_cloud_login, async_fetch_device_key
@@ -38,7 +43,12 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_DEVICE_KEY,
     CONF_NAME,
+    CONF_POLL_INTERVAL,
+    CONF_PRODUCT_ID,
+    CONF_STALE_TIMEOUT,
     DOMAIN,
+    STALE_TIMEOUT,
+    UPDATE_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,6 +83,27 @@ def _extract_device_id(manufacturer_data: dict[int, bytes]) -> str | None:
     return None
 
 
+def _extract_product_id(manufacturer_data: dict[int, bytes]) -> str | None:
+    """Extract the 6-char ASCII product_id from BLE manufacturer data.
+
+    The product_id occupies bytes 11-16 of the raw manufacturer AD payload,
+    which maps to payload[9:15] after Bleak splits out the 2-byte company_id.
+    """
+    for company_id, payload in manufacturer_data.items():
+        if len(payload) < 15:
+            continue
+        flag = company_id & 0xFF
+        if flag > 1:
+            continue
+        try:
+            pid = payload[9:15].decode("ascii")
+            if pid.isprintable() and len(pid) == 6:
+                return pid
+        except (UnicodeDecodeError, ValueError):
+            pass
+    return None
+
+
 def _extract_device_id_for_address(hass, address: str) -> str | None:
     """Search HA's known BLE advertisements for a device_id by MAC."""
     for svc in async_discovered_service_info(hass):
@@ -80,6 +111,16 @@ def _extract_device_id_for_address(hass, address: str) -> str | None:
             did = _extract_device_id(svc.manufacturer_data)
             if did:
                 return did
+    return None
+
+
+def _extract_product_id_for_address(hass, address: str) -> str | None:
+    """Search HA's known BLE advertisements for a product_id by MAC."""
+    for svc in async_discovered_service_info(hass):
+        if svc.address.upper() == address.upper():
+            pid = _extract_product_id(svc.manufacturer_data)
+            if pid:
+                return pid
     return None
 
 
@@ -99,6 +140,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._address: str | None = None
         self._name: str | None = None
         self._device_id: str | None = None
+        self._product_id: str | None = None
         self._pairing_key: str | None = None
         self._pairing_task: asyncio.Task | None = None
         self._pairing_error: str | None = None
@@ -115,6 +157,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._address = discovery_info.address
         self._name = discovery_info.name or "OUPES Mega"
         self._device_id = _extract_device_id(discovery_info.manufacturer_data)
+        self._product_id = _extract_product_id(discovery_info.manufacturer_data)
 
         self.context["title_placeholders"] = {
             "name": self._name,
@@ -159,6 +202,9 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._address = address
                 self._name = name
                 self._device_id = _extract_device_id_for_address(
+                    self.hass, address
+                )
+                self._product_id = _extract_product_id_for_address(
                     self.hass, address
                 )
                 return await self.async_step_choose_method()
@@ -307,18 +353,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_pairing_complete(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Pairing succeeded — create the config entry."""
-        await self.async_set_unique_id(self._address)
-        self._abort_if_unique_id_configured()
-        return self.async_create_entry(
-            title=self._name,
-            data={
-                CONF_ADDRESS: self._address,
-                CONF_NAME: self._name,
-                CONF_DEVICE_KEY: self._pairing_key,
-                CONF_DEVICE_ID: self._device_id or "",
-            },
-        )
+        """Pairing succeeded — proceed to connection settings."""
+        return await self.async_step_connection_settings()
 
     # ── Method B: Enter existing key ─────────────────────────────────────
 
@@ -333,17 +369,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if not _valid_device_key(raw_key):
                 errors[CONF_DEVICE_KEY] = "invalid_device_key"
             else:
-                await self.async_set_unique_id(self._address)
-                self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=self._name,
-                    data={
-                        CONF_ADDRESS: self._address,
-                        CONF_NAME: self._name,
-                        CONF_DEVICE_KEY: raw_key,
-                        CONF_DEVICE_ID: self._device_id or "",
-                    },
-                )
+                self._pairing_key = raw_key
+                return await self.async_step_connection_settings()
 
         return self.async_show_form(
             step_id="existing_key",
@@ -382,17 +409,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._address,
                 )
                 if key:
-                    await self.async_set_unique_id(self._address)
-                    self._abort_if_unique_id_configured()
-                    return self.async_create_entry(
-                        title=self._name,
-                        data={
-                            CONF_ADDRESS: self._address,
-                            CONF_NAME: self._name,
-                            CONF_DEVICE_KEY: key,
-                            CONF_DEVICE_ID: self._device_id or "",
-                        },
-                    )
+                    self._pairing_key = key
+                    return await self.async_step_connection_settings()
                 errors["cloud_email"] = "cloud_login_failed"
 
         return self.async_show_form(
@@ -408,6 +426,73 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "address": self._address,
             },
             errors=errors,
+        )
+
+
+    # ── Connection settings (final step before entry creation) ──────────
+
+    async def async_step_connection_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Let the user choose connection mode before creating the entry."""
+        if user_input is not None:
+            continuous = user_input.get(CONF_CONTINUOUS, True)
+            poll_interval = int(user_input.get(
+                CONF_POLL_INTERVAL, UPDATE_INTERVAL.total_seconds()
+            ))
+            stale_timeout = int(user_input.get(
+                CONF_STALE_TIMEOUT, STALE_TIMEOUT.total_seconds() // 60
+            ))
+            debug_attrs = user_input.get(CONF_DEBUG_ATTRS, False)
+            debug_raw = user_input.get(CONF_DEBUG_RAW, False)
+            await self.async_set_unique_id(self._address)
+            self._abort_if_unique_id_configured()
+            return self.async_create_entry(
+                title=self._name,
+                data={
+                    CONF_ADDRESS: self._address,
+                    CONF_NAME: self._name,
+                    CONF_DEVICE_KEY: self._pairing_key,
+                    CONF_DEVICE_ID: self._device_id or "",
+                    CONF_PRODUCT_ID: self._product_id or "",
+                },
+                options={
+                    CONF_CONTINUOUS: continuous,
+                    CONF_POLL_INTERVAL: poll_interval,
+                    CONF_STALE_TIMEOUT: stale_timeout,
+                    CONF_DEBUG_ATTRS: debug_attrs,
+                    CONF_DEBUG_RAW: debug_raw,
+                },
+            )
+
+        default_poll = int(UPDATE_INTERVAL.total_seconds())
+        default_stale = int(STALE_TIMEOUT.total_seconds() // 60)
+
+        return self.async_show_form(
+            step_id="connection_settings",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CONTINUOUS, default=True): bool,
+                    vol.Optional(
+                        CONF_POLL_INTERVAL, default=default_poll,
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=10, max=600, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="seconds",
+                    )),
+                    vol.Optional(
+                        CONF_STALE_TIMEOUT, default=default_stale,
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=1, max=120, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
+                    vol.Required(CONF_DEBUG_ATTRS, default=False): bool,
+                    vol.Required(CONF_DEBUG_RAW, default=False): bool,
+                }
+            ),
+            description_placeholders={
+                "name": self._name,
+                "address": self._address,
+            },
         )
 
 
@@ -450,34 +535,12 @@ class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             raw_key = user_input.get(CONF_DEVICE_KEY, "").strip()
-            cloud_email = user_input.get("cloud_email", "").strip()
-            cloud_password = user_input.get("cloud_password", "").strip()
 
             if raw_key and not _valid_device_key(raw_key):
                 errors[CONF_DEVICE_KEY] = "invalid_device_key"
 
-            if not raw_key and not errors and cloud_email and cloud_password:
-                raw_key = await _cloud_fetch_key(
-                    self.hass,
-                    cloud_email,
-                    cloud_password,
-                    self._entry.data.get(CONF_DEVICE_ID),
-                    self._entry.data.get(CONF_ADDRESS),
-                )
-                if raw_key:
-                    _LOGGER.info(
-                        "Fetched device_key via cloud login for %s",
-                        self._entry.data.get(CONF_ADDRESS),
-                    )
-                else:
-                    errors["cloud_email"] = "cloud_login_failed"
-
             if not errors:
-                opts = {
-                    k: v
-                    for k, v in user_input.items()
-                    if k not in ("cloud_email", "cloud_password")
-                }
+                opts = dict(user_input)
                 if raw_key:
                     opts[CONF_DEVICE_KEY] = raw_key
                 return self.async_create_entry(title="", data=opts)
@@ -488,17 +551,32 @@ class OUPESMegaOptionsFlow(config_entries.OptionsFlow):
             or ""
         )
 
+        default_poll = int(UPDATE_INTERVAL.total_seconds())
+        default_stale = int(STALE_TIMEOUT.total_seconds() // 60)
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Optional("cloud_email", default=""): str,
-                    vol.Optional("cloud_password", default=""): str,
                     vol.Optional(CONF_DEVICE_KEY, default=current_key): str,
                     vol.Required(
                         CONF_CONTINUOUS,
-                        default=self._entry.options.get(CONF_CONTINUOUS, False),
+                        default=self._entry.options.get(CONF_CONTINUOUS, True),
                     ): bool,
+                    vol.Optional(
+                        CONF_POLL_INTERVAL,
+                        default=self._entry.options.get(CONF_POLL_INTERVAL, default_poll),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=10, max=600, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="seconds",
+                    )),
+                    vol.Optional(
+                        CONF_STALE_TIMEOUT,
+                        default=self._entry.options.get(CONF_STALE_TIMEOUT, default_stale),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=1, max=120, step=1, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
                     vol.Required(
                         CONF_DEBUG_ATTRS,
                         default=self._entry.options.get(CONF_DEBUG_ATTRS, False),

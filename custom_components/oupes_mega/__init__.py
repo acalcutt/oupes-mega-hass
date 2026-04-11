@@ -9,12 +9,25 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import CONF_ADDRESS, CONF_CONTINUOUS, CONF_DEBUG_ATTRS, CONF_DEBUG_RAW, CONF_DEVICE_KEY, CONF_NAME, DOMAIN
+from .const import (
+    CONF_ADDRESS,
+    CONF_CONTINUOUS,
+    CONF_DEBUG_ATTRS,
+    CONF_DEBUG_RAW,
+    CONF_DEVICE_KEY,
+    CONF_NAME,
+    CONF_POLL_INTERVAL,
+    CONF_PRODUCT_ID,
+    CONF_STALE_TIMEOUT,
+    DOMAIN,
+    STALE_TIMEOUT,
+    UPDATE_INTERVAL,
+)
 from .coordinator import OUPESMegaCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.SWITCH, Platform.NUMBER]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -22,9 +35,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address: str = entry.data[CONF_ADDRESS]
     name: str = entry.data.get(CONF_NAME, "OUPES Mega")
 
-    continuous: bool = entry.options.get(CONF_CONTINUOUS, False)
+    continuous: bool = entry.options.get(CONF_CONTINUOUS, True)
     debug_attrs: bool = entry.options.get(CONF_DEBUG_ATTRS, False)
     debug_raw: bool = entry.options.get(CONF_DEBUG_RAW, False)
+    poll_interval: int = entry.options.get(
+        CONF_POLL_INTERVAL, int(UPDATE_INTERVAL.total_seconds())
+    )
+    stale_timeout: int = entry.options.get(
+        CONF_STALE_TIMEOUT, int(STALE_TIMEOUT.total_seconds() // 60)
+    )
     device_key: str = (
         entry.options.get(CONF_DEVICE_KEY)
         or entry.data.get(CONF_DEVICE_KEY)
@@ -39,7 +58,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = OUPESMegaCoordinator(
         hass, address, name,
         device_key=device_key,
+        product_id=entry.data.get(CONF_PRODUCT_ID, ""),
         continuous=continuous,
+        poll_interval_seconds=poll_interval,
+        stale_timeout_minutes=stale_timeout,
         debug_attrs=debug_attrs,
         debug_raw=debug_raw,
     )

@@ -32,6 +32,13 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [BLE Python Example](#ble-python-example)
 - [Telemetry Attribute Map](#telemetry-attribute-map)
 - [WiFi Local Port Investigation](#wifi-local-port-investigation)
+- [Firmware Update (OTA)](#firmware-update-ota)
+  - [OTA Architecture](#ota-architecture)
+  - [OTA Version Check API](#ota-version-check-api)
+  - [OTA Command Protocol (Cmd5)](#ota-command-protocol-cmd5)
+  - [Board Targets](#board-targets)
+  - [Firmware Binary Format](#firmware-binary-format)
+  - [DNS Redirect Attack Surface](#dns-redirect-attack-surface)
 - [Notes & Unknowns](#notes--unknowns)
 
 ---
@@ -935,9 +942,11 @@ Screenshots of the Cleanergy app were used to calibrate attr values. The app dis
 ## WiFi Local Port Investigation
 
 The OUPES Mega 1 has an ESP32 with WiFi capability. During BLE pairing via the
-Cleanergy app, real WiFi credentials (SSID + PSK) are transmitted in the CLAIM
-sequence (see [Phase 4](#phase-4--claim-10-packets-slot-0x03) above). The device
-then connects to the Alibaba Cloud broker at `47.252.10.9:8896` and maintains a
+Cleanergy app, a 30-char random binding token is transmitted in the CLAIM
+sequence (see [Phase 4](#phase-4--claim-10-packets-slot-0x03) above) — originally
+misidentified as WiFi SSID + PSK, but actually `generateRandomString(30)` from the APK.
+How the device obtains its WiFi credentials is unknown. The device
+connects to the Alibaba Cloud broker at `47.252.10.9:8896` and maintains a
 `cmd=ping` / `cmd=pong` heartbeat. However, this cloud connection is **only active
 while a phone is BLE-paired** — it drops immediately when BLE disconnects.
 
@@ -946,7 +955,7 @@ while a phone is BLE-paired** — it drops immediately when BLE disconnects.
 | Source | Finding |
 |--------|---------|
 | Router pcap (`192.168.1.209`) | Device connects outbound to `47.252.10.9:8896` (TCP). Only `cmd=ping` / `cmd=pong` heartbeats observed — no telemetry data in the capture. |
-| btsnoop (17 bugreports) | CLAIM packets 6/7/8 carry real WiFi PSK + SSID. **Same credentials in every pairing session** — the app re-sends the phone's current WiFi credentials each time. |
+| btsnoop (17 bugreports) | CLAIM packets 6/7/8 carry a 30-char random alphanumeric binding token (`generateRandomString(30)`), NOT WiFi credentials as originally assumed. Same token per pairing session; different token each session. |
 | UDP broadcast (app) | App sends `{"cmd":0,"pv":0,"sn":"..."}` to `255.255.255.255:6095`. Device does **not** respond. One-way only. |
 | Cloud TCP 8896 | Requires active BLE session. Device publishes `num=0` (no subscribers) when no phone is BLE-connected. Not viable for unattended HA use. |
 
@@ -977,13 +986,255 @@ python debug_info/scan_wifi_ports.py 192.168.1.209 --udp
 the Cleanergy app first (or use `pair_device.py` with real WiFi credentials in
 the CLAIM sequence), then run the scan immediately while the BLE session is active.
 
-### Provisioning WiFi via `pair_device.py`
+### ~~Provisioning WiFi via BLE~~ — Not Possible
 
-The current `pair_device.py` sends `HALOCAL000000000000000000000000` as the WiFi
-blob, which the device accepts but likely doesn't connect to any WiFi network with.
-To provision real WiFi credentials during pairing, the CLAIM packets 6/7/8 would
-need to carry the actual SSID and PSK. This is a future enhancement — the BLE-only
-path works without WiFi provisioning.
+The 30-byte blob in CLAIM packets 6-8 was originally assumed to carry WiFi
+credentials (SSID + PSK). **This was incorrect.** APK source analysis revealed:
+
+1. The 30-byte blob is `generateRandomString(30)` — a random `[A-Za-z0-9]`
+   binding token (likely an `openId`), NOT WiFi credentials.
+2. The Mega 1 is classified as `SingleBleDevice` (BLE-only). The full Cmd1
+   method that takes `ssid` + `passwd` parameters exists in the APK but is
+   **dead code — never called** from any reachable path.
+3. Both `SingleBleDevice.updateDeviceData()` and `WifiBleDevice.updateDeviceData()`
+   call only `Cmd1Verify`, which sends `token` + `deviceKey` — no WiFi credentials.
+4. The device's ESP32 WiFi connection to `47.252.10.9:8896` must get its WiFi
+   credentials through some other mechanism (possibly factory-configured, or via
+   the un-decompilable `toSendConfigNetData` initial pairing flow).
+
+The WiFi provisioning mechanism for the Mega 1, if it exists, is not in the
+BLE CLAIM protocol we reverse-engineered. The BLE-only path remains the
+recommended approach for Home Assistant integration.
+
+---
+
+## Firmware Update (OTA)
+
+The OUPES firmware update system was reverse-engineered from the Cleanergy APK (v1.4.1) and confirmed by live API testing against the production server.
+
+### OTA Architecture
+
+The device uses a **WiFi-centric OTA** design. Firmware binaries are **never** pushed over BLE — the app sends the device a URL, and the device's ESP32 WiFi module downloads the binary independently.
+
+```
+┌─────────────┐    1. POST /api/app/ota/new_version    ┌──────────────────────┐
+│  App / HA   │ ──────────────────────────────────────→ │  api.upspowerstation │
+│  (client)   │ ←────────────────────────────────────── │      .top            │
+│             │    Returns: {url, fs, sv, hash, target} │                      │
+└──────┬──────┘                                         └──────────────────────┘
+       │
+       │  2. Cmd5 JSON via WiFi TCP   ┌─────────────────────┐
+       │     (or cloud relay)         │  OUPES Device       │
+       └─────────────────────────────→│  (ESP32 + MCUs)     │
+                                      │                     │
+                                      │  3. Device fetches  │
+                                      │     firmware from   │
+                                      │     URL in Cmd5     │──→ static.upspowerstation.top
+                                      │                     │←── (firmware .bin file)
+                                      │  4. Applies update, │
+                                      │     reports progress│
+                                      └─────────────────────┘
+```
+
+**Three communication paths for Cmd5:**
+
+| Path | Transport | When Used |
+|------|-----------|-----------|
+| Local WiFi TCP | Direct TCP to device's localhost port | App and device on same LAN |
+| Cloud relay | TCP via `wp-us.doiting.com:8896` → device | Remote / fallback |
+| BLE signaling | BLE Cmd 99 (prepare), Cmd 0 (version query) | Pre-OTA handshake only — no data transfer |
+
+**BLE is signaling-only for OTA.** The `SingleBleDevice.getCmd5()` method returns an empty string for binary data. The Jieli BLE-OTA stack exists in the codebase but is for audio/SPP devices on a different product line.
+
+### OTA Version Check API
+
+```
+POST http://api.upspowerstation.top/api/app/ota/new_version
+Content-Type: application/json
+
+{
+  "product_id": "O44A5o",
+  "sku": 0,
+  "is_test": 0,
+  "token": "<session_token>",
+  "platform": "android",
+  "lang": "en"
+}
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `product_id` | string | 6-char device product ID (e.g. `O44A5o` = Mega 1) |
+| `sku` | int | Stock keeping unit (observed as `0` for all queries) |
+| `is_test` | int | `0` = production releases, `1` = test/beta firmware |
+| `token` | string | Auth token from `/api/app/user/login` |
+
+**Response** (when firmware is available):
+
+```json
+{
+  "ret": 1,
+  "desc": "succes",
+  "info": {
+    "id": 21,
+    "product_id": 79,
+    "status": 1,
+    "version_num": 23,
+    "sv": "0.2.4",
+    "ota_id": "[{\"id\":51,\"sv\":\"0.0.5\",\"target\":161}, ...]",
+    "desc": "esp32",
+    "sku": 0,
+    "is_test": 1,
+    "ota": [
+      {
+        "target": 161,
+        "fs": 61284,
+        "hash": "c5da5bf17c08463...",
+        "sv": "0.0.5",
+        "version_num": 49,
+        "url": "http://static.upspowerstation.top/upload/file/20260301/de63337b_D2_INV_2500W.bin",
+        "sku": 0
+      },
+      {
+        "target": 255,
+        "fs": 1235168,
+        "hash": "0",
+        "sv": "0.4.8",
+        "version_num": 91,
+        "url": "http://static.upspowerstation.top/upload/file/20260318/16aa8659_wifi.bin",
+        "sku": 0
+      }
+    ]
+  }
+}
+```
+
+When no firmware is available, `info` is an empty string `""`.
+
+**Live API test results (2026-04-10):**
+
+| Product ID | Model | Production | Test |
+|------------|-------|------------|------|
+| `O44A5o` | Mega 1 | None | None |
+| `YRWj81` | Mega 2 | None | None |
+| `EFDayi` | Mega 3 | None | None |
+| `JTEnK3` | Mega 5 | None | None |
+| `Hr9Uhd` | Exodus 1200 | None | None |
+| `pba1j6` | Exodus 1500 | None | None |
+| `IDaSL8` | Exodus 2400 | None | None |
+| `LtQmdj` | HP2500 (D2) | None | 4 boards (INV, BMS, DC, ESP32) |
+| `uAsyax` | UPS 1200 | None | Inverter board |
+| `QWlryl` | UPS 1800 | None | Inverter board |
+| `oB6OKs` | Guardian 6000 | None | None |
+
+The Mega series has no firmware currently posted on the OTA server.
+
+### OTA Command Protocol (Cmd5)
+
+The app triggers the firmware download by sending a Cmd5 JSON payload to the device via WiFi TCP.
+
+**Pre-OTA BLE handshake:**
+
+1. App sends **BLE Cmd 99** — tells device to prepare for OTA
+2. App sends **BLE Cmd 0** — queries current firmware version (response = `BleCmd0Result`)
+3. App navigates to `FirmwareUpgradeFragment2`
+
+**Cmd5 payload (single board):**
+
+```json
+{"url": "http://static.upspowerstation.top/.../firmware.bin", "fs": 1235168, "sv": "0.4.8"}
+```
+
+**Cmd5 payload (multi-board / module update):**
+
+```json
+{
+  "url": "http://static.upspowerstation.top/.../D2_INV_2500W.bin",
+  "fs": 61284,
+  "sv": "0.0.5",
+  "target": 161,
+  "module_addr": 5000,
+  "hash": "c5da5bf17c0846379099eed25edefb0204605e2a47486b3a30036c47c4abddd9"
+}
+```
+
+**Multi-file format (all boards at once):**
+
+```json
+{
+  "total": 3,
+  "files": [
+    {"url": "...", "type": 161, "size": 61284, "vs": "0.0.5"},
+    {"url": "...", "type": 163, "size": 42364, "vs": "0.0.3"},
+    {"url": "...", "type": 255, "size": 1235168, "vs": "0.4.8"}
+  ]
+}
+```
+
+**Device response flow:**
+
+| Step | Direction | Content |
+|------|-----------|---------|
+| Cmd5 sent | App → Device | JSON with firmware URL |
+| `ota_code: -12` (=244 unsigned) | Device → App | "Command received, ready to update" |
+| Progress type 1 | Device → App | Download progress (device fetching from URL) |
+| Progress type 2 | Device → App | Flash/apply progress |
+| Complete / Error | Device → App | Final status or OTA error code |
+
+The app retries sending the Cmd5 payload every 1 second for up to 10 seconds until it receives the `ota_code: -12` acknowledgment.
+
+### Board Targets
+
+Each OUPES device contains multiple independently-updatable boards:
+
+| Target ID | Board | Description |
+|-----------|-------|-------------|
+| 161 | Inverter | Main AC inverter MCU (GD32F303 ARM Cortex-M) |
+| 162 | PV | Solar MPPT controller |
+| 163 | BMS | Battery management system (GD32F303) |
+| 164 | DC | DC output controller (GD32F303) |
+| 255 | ESP32 | WiFi/BLE communication module |
+
+Target priorities (from `FirmwareUpgradeFragment2`):
+- Priority 0: Target 255 (ESP32 — updated first)
+- Priority 1: Targets 161, 162 (Inverter and PV)
+- Priority 2: Target 163 (BMS — updated last)
+
+### Firmware Binary Format
+
+Firmware files served by the OTA server are **unencrypted, unsigned raw binaries**:
+
+- **ESP32 (target 255):** Standard ESP-IDF flash image. Magic byte `0xE9` at offset 0. Example: `wifi.bin` (1.2 MB). These can be analyzed with `esptool.py image_info`.
+- **MCU boards (targets 161–164):** Raw ARM Cortex-M vector tables for GD32F303 (STM32-compatible). Starts with the initial stack pointer at offset 0 (e.g. `E0 19 00 20` = SP @ `0x200019E0`) followed by exception vectors. Standard `.bin` format produced by `arm-none-eabi-objcopy -O binary`.
+
+Integrity verification uses **SHA-256 hash** only (the `hash` field in `OtaVersionBean`). There is no cryptographic signature verification — the device trusts whatever binary it downloads from the URL provided in the Cmd5 command.
+
+### DNS Redirect Attack Surface
+
+Because the firmware update protocol relies on unencrypted HTTP URLs and has no signature verification, a DNS redirect is a viable method for serving custom firmware:
+
+1. **Point `static.upspowerstation.top` to a local server** (via DNS override, hosts file, or router DNS)
+2. **Serve a custom firmware binary** at the same URL path the device expects
+3. **Trigger the update** either via:
+   - The official Cleanergy app (if an OTA entry exists on the server)
+   - Direct Cmd5 JSON sent via WiFi TCP to the device's local port
+   - Cloud relay via the TCP 8896 broker
+
+**Requirements for DNS redirect approach:**
+
+| Requirement | Details |
+|-------------|---------|
+| DNS control | Override `static.upspowerstation.top` resolution |
+| HTTP server | Serve the .bin file at the expected path |
+| Firmware binary | A valid ESP32 or GD32 binary for the target board |
+| SHA-256 hash | Must match the hash sent in the Cmd5 command (or the device may not verify — untested) |
+| Cmd5 trigger | Either use the app or send the JSON directly |
+
+**Alternative: Local WiFi TCP direct.** If you know the device's local TCP port (obtained during BLE pairing), you can send the Cmd5 JSON directly without DNS redirection, pointing the URL at any HTTP server on the local network.
+
+> **Caution:** Flashing incorrect firmware can brick the device. The MCU boards (inverter, BMS, DC) control high-voltage power electronics. Only flash firmware you have verified is correct for your specific hardware revision.
 
 ---
 
@@ -1041,3 +1292,294 @@ path works without WiFi provisioning.
 - **BLE handshake response decoded.** After the app sends the initial 0x80/0x00 handshake packet, the device responds with two notification packets containing: (1) the full `device_id` as raw bytes, and (2) the reversed MAC address + `device_product_id` in ASCII. The app uses these to confirm it connected to the expected device before proceeding with the init sequence.
 - **Cleanergy app uses two BLE slots:** The btsnoop19 capture shows the app initializing both slot 3 (first) and slot 1 (second). Slot 3 init packets carry the `device_key` plus an MQTT `client_id` string (29 chars spread across packets 6–8). Slot 1 init packets carry only the `device_key` (no MQTT data — zeros in packets 7–8). The slot 3 handshake is sent first, then slot 1. The HA integration's working init sequence uses only slot 1 — the slot 3 MQTT setup is only needed for cloud push functionality.
 - **Cloud product catalog observed in logcat.** The Cleanergy app downloads a full product model catalog from the cloud on startup, containing SKU mappings and product images for all OUPES models: UPS-800, UPS-1200, UPS-1800, S2-V2, HP6000_V2, PB300, LP700, LP350, S024 Lite, S1 Lite, HP2500 (MEGA2PRO), Guardian 6000, DC 800, MEGA 5, MEGA2, MEGA3, MEGA1, Exodus 1200/1500/2400, shelly plug, shelly meter. This confirms the product line scope and suggests the protocol may be shared across the entire range.
+
+---
+
+## Device Settings — Write Commands (Cmd3)
+
+The Cleanergy app writes device settings via a **Cmd3** protocol — distinct from
+the output bitmask toggle (Cmd via `0180 0302 01 <bitmask>`) documented above.
+Cmd3 is used for all configurable parameters: standby timeouts, ECO mode, silent
+mode, breath light, etc.
+
+**Source:** `SingleBleDevice.getBleToDeviceSetDevicePropertyCmd3()` in the
+decompiled APK. Settings are sent as JSON `{"data": {"<DPID>": <value>}}` which
+the device link layer serializes to BLE hex packets.
+
+### WiFi/Cloud write format
+
+Over the TCP 8896 cloud channel, settings are written with `cmd=3`:
+
+```json
+{
+  "msg": {"attr": [47], "data": {"47": 600}},
+  "pv": 0,
+  "cmd": 3,
+  "sn": "<timestamp_ms_string>"
+}
+```
+
+### BLE write format (Cmd3 hex packets)
+
+Each DPID value is encoded as a variable-length hex packet segment:
+
+```
+03  <total_len>  <dpid_hex>  <value_hex>
+```
+
+| Field | Description |
+|-------|-------------|
+| `03` | Fixed command type byte |
+| `<total_len>` | Byte count of (dpid + value), 2-char hex |
+| `<dpid_hex>` | DPID as 2-char hex (e.g. DPID 47 → `2F`) |
+| `<value_hex>` | Integer value in little-endian hex, variable width (1–4 bytes, determined by `getIntByteSize()`) |
+
+Multiple DPID segments are concatenated into a single BLE write. The BLE
+transport splits the concatenated hex into 20-byte packets with the standard
+`01 <slot> ...` framing and CRC-8 checksum.
+
+**Example:** Set USB/Car standby timeout to 10 minutes (600 seconds):
+```
+DPID 47 (0x2F), value 600 (0x0258) → segment: 03 03 2F 5802
+```
+(Value is little-endian: 600 = 0x0258 → bytes `58 02`; total_len = 1 (dpid) + 2 (value) = 3)
+
+### Writable Device Settings (DPIDs)
+
+> **Status:** Reverse-engineered from APK UI fragments and BatteryData model.
+> DPIDs are **unverified against hardware** unless noted. The Mega 1 may not
+> support all DPIDs — some are for other models (D2, LP350, UPS, etc.).
+
+#### Standby / Auto-off Timeouts
+
+These control how long the device waits before automatically turning off an
+idle output or entering sleep mode.
+
+| DPID | BatteryData Field | Setting | Unit | Preset Values |
+|------|-------------------|---------|------|---------------|
+| 45 | `standby_time` | **Machine standby** (whole device sleep) | Seconds | 0 (never), 3600, 10800, 21600, 43200 |
+| 46 | `wifiStandByTime` | **WiFi standby** | Seconds | 0, 21600, 43200, 86400 |
+| 47 | `usbCarCloseTime` / `usbStandByTime` | **USB/Car port standby** | Seconds | 600, 1800, 3600, 10800, 21600 |
+| 48 | `xt90CloseTime` / `xt90StandByTime` | **XT90 port standby** | Seconds | 600, 1800, 3600, 10800, 21600 |
+| 49 | `acCloseTime` / `acStandByTime` | **AC output standby** | Seconds | 600, 1800, 3600, 10800, 21600 |
+
+> **Conversion note:** The app UI shows minutes/hours but sends **seconds** to
+> the device (value × 60 from the UI). Value `0` = never auto-off.
+
+#### ECO Mode (Low-load Auto-off)
+
+| DPID | BatteryData Field | Setting | Unit | Values |
+|------|-------------------|---------|------|--------|
+| 110 | `AC_Eco_Switch` | **AC ECO mode switch** | Boolean | 0 = off, 1 = on |
+| 111 | `AC_Eco_threshold` | **AC ECO power threshold** | Watts | 0–100 (below this → auto-off) |
+| 112 | `DC_Eco_Switch` | **DC ECO mode switch** | Boolean | 0 = off, 1 = on |
+| 113 | `DC_Eco_threshold` | **DC ECO power threshold** | Watts | 0–100 |
+| 114 | `AC_Eco_Time` | **AC ECO auto-off delay** | Seconds | Time before AC ECO shuts off |
+| 115 | `DC_Eco_Time` | **DC ECO auto-off delay** | Seconds | Time before DC ECO shuts off |
+
+#### System Toggles
+
+| DPID | BatteryData Field | Setting | Values |
+|------|-------------------|---------|--------|
+| 41 | `displayAutoCloseTime` | **Screen/display auto-off timeout** | Seconds (0 = never) |
+| 58 | `breathLightSwitch` | **Breath light (LED ring)** | 0 = off, 1 = on |
+| 61 | `frequencySwitch` | **50/60 Hz frequency select** | 0 or 1 |
+| 62 | `bluetoothSwitch` | **Bluetooth on/off** | 0 = off, 1 = on |
+| 63 | `silentMode` | **Silent mode** (fan speed reduction) | 0 = off, 1 = on |
+| 64 | `nightMode` | **Night mode** (display dim + quiet) | 0 = off, 1 = on |
+| 65 | `nightModeTime` | **Night mode duration** | Seconds |
+
+#### Output State Memory
+
+| DPID | BatteryData Field | Setting | Values |
+|------|-------------------|---------|--------|
+| 27 | `acDcMemDcSwitch` | **DC output memory** (restore state after power cycle) | 0 = off, 1 = on |
+| 224 | `energySwitch` | **Energy management / memory function** | 0 = off, 1 = on |
+
+> **Note:** DPID 27 may be a raw bitmask containing both AC and DC memory flags.
+> The BatteryData model has separate `acDcMemAcSwitch` and `acDcMemDcSwitch`
+> fields but they appear to be parsed from the same raw value (`acDcMemSwitchRaw`).
+
+#### DFC Charger Timeouts (for DFC / external charger accessories)
+
+| DPID | BatteryData Field | Setting | Unit | Preset Values |
+|------|-------------------|---------|------|---------------|
+| 218 | `dfc_charge_timeout` | **Charge timeout** | Minutes | 5, 30, 60, 360, 720, 1440 |
+| 219 | `dfc_discharge_timeout` | **Discharge timeout** | Minutes | 5, 30, 60, 360, 720, 1440 |
+| 220 | `dfc_save_timeout` | **Save/standby timeout** | Minutes | 5, 30, 60, 360, 720, 1440 |
+
+#### Charge Power Limits
+
+| DPID | BatteryData Field | Setting | Unit |
+|------|-------------------|---------|------|
+| 106 | `acChargingPowerMax` | **AC charger max power** | Watts |
+
+> **Note:** DPID 105 is the **AC inverter protection** read-only flag (0/1,
+> indicates thermal/overcurrent protection active). DPID 106 is the **writable**
+> AC charging power max setting. The APK's `D2AcChargerPowerFragment` queries
+> both (`BleBean(new int[]{105, 106}, null)`) and writes only DPID 106.
+
+#### Scheduled Tasks (D2/D5 models only)
+
+| DPID | BatteryData Field | Setting |
+|------|-------------------|---------|
+| 69 | `taskIndex` | Task hour/minute A |
+| 70 | `taskNumber` | Task hour/minute B |
+| 71 | `taskSwitch` | Task enable/disable (0/1) |
+| 72 | `taskSlot` | Task time slot number |
+| 73 | `taskActionFlag` | Task action flag |
+| 74 | `taskRepeatTimeFlag` | Repeat flag (0–127 days) |
+| 75 | `taskRepeatTime` | Weekday bitmask |
+
+#### Low Battery Alarm
+
+| DPID | BatteryData Field | Setting | Unit |
+|------|-------------------|---------|------|
+| — | `lowBatteryAlarmSwitch` | **Low battery alarm on/off** | 0/1 |
+| — | `lowBatteryAlarmThreshold` | **Low battery alarm level** | % |
+| — | `lowBatteryAlarmDuration` | **Alarm duration** | Seconds (float) |
+
+> The DPIDs for the low battery alarm fields are not confirmed — they may be
+> set via a composite/array DPID rather than individual writes.
+
+#### Additional Read-only Status Fields (not writable)
+
+| DPID | BatteryData Field | Description |
+|------|-------------------|-------------|
+| 208 | `battery_output_power` | Battery output power (display only) |
+| 209 | `battery_starting_voltage` | Battery starting voltage (display only) |
+
+### What the HA Integration Currently Supports
+
+**Currently implemented:** Only the output bitmask (attr 1) is writable — AC,
+DC 12V, and USB output on/off via `build_output_command()`.
+
+**Not yet implemented (candidates for new HA entities):**
+
+| Priority | DPIDs | Entity Type | Rationale |
+|----------|-------|-------------|-----------|
+| High | 47, 48, 49 | `number` (seconds) | USB/XT90/AC standby timeouts — most commonly adjusted |
+| High | 45 | `number` (seconds) | Machine standby timeout — prevents unexpected sleep |
+| High | 10, 17 | `switch` | AC/DC ECO mode on/off |
+| High | 11, 18 | `number` (watts) | AC/DC ECO power thresholds |
+| Medium | 7 | `switch` | Silent mode |
+| Medium | 32 | `switch` | Breath light on/off |
+| Medium | 8 | `switch` | Night mode |
+| Low | 33 | `select` | 50/60 Hz frequency |
+| Low | 31 | `switch` | Bluetooth on/off |
+| Low | 224 | `switch` | Energy management / memory function |
+
+---
+
+## Product Model IDs
+
+The `device_product_id` is a 6-character ASCII string broadcast in BLE
+advertising data (service data UUID `0xA201` and manufacturer-specific data).
+It identifies the product model and is the same across all units of the same
+model. The HA integration currently does not use this value, but it could be
+used to auto-detect device capabilities and adjust available entities per model.
+
+**Source:** `AppParams.java` in the decompiled APK (Cleanergy app v1.4.1).
+
+### Known Product IDs
+
+| Product ID | Model | Series | Notes |
+|------------|-------|--------|-------|
+| `O44A5o` | **MEGA 1** | Mega | Currently tested, confirmed working |
+| `YRWj81` | **MEGA 2** | Mega | Planned for testing |
+| `EFDayi` | **MEGA 3** | Mega | |
+| `JTEnK3` | **MEGA 5** | Mega | |
+| `Hr9Uhd` | **Exodus 1200 / S012** | Exodus | |
+| `pba1j6` | **Exodus 1500 / S015** | Exodus | |
+| `IDaSL8` | **Exodus 2400 / S024** | Exodus | |
+| `gF7XRS` | **S024 Lite** | Exodus | |
+| `H99Evi` | **S1 Lite** | Exodus | |
+| `oB6OKs` | **Guardian 6000 / D5** | Guardian | Also HP6000 |
+| `LtQmdj` | **HP2500 / D2** | Guardian | Also MEGA2PRO |
+| `95haDY` | **D5 V2** | Guardian | Newer revision |
+| `xLtGhT` | **S2 V2** | — | Newer revision |
+| `5cY3Mf` | **DC 800** | — | |
+| `zcWgyE` | **LP350 / L350** | LP | |
+| `fckIgv` | **LP700 / L700** | LP | |
+| `ZlD25j` | **PB300** | Portable | |
+| `uAsyax` | **UPS 1200** | UPS | |
+| `QWlryl` | **UPS 1800** | UPS | |
+
+### Where the Product ID Appears
+
+1. **BLE service data** (UUID `0xA201`): 2-byte header + 6-byte product_id + reversed MAC
+2. **BLE manufacturer data** (AD type `0xFF`): bytes 11–16 of the raw payload
+3. **BLE handshake response**: in the second notification after init
+4. **Cloud API** (`/api/app/device/list`): `device_product_id` field in JSON
+5. **Cloud API** (`/api/app/device/model`): full product catalog with images
+
+### Multi-device Support Considerations
+
+The BLE and cloud protocols appear to be shared across the entire OUPES product
+range. Key differences between models are likely:
+
+- **Supported DPIDs:** Not all models support all settings. The Mega 1 may not
+  respond to DFC charger DPIDs (218–220) or scheduled task DPIDs (69–75).
+  Conversely, UPS models have alarm-specific DPIDs not present on power stations.
+- **Telemetry attributes:** The core attrs (1–9, 21–23, 30, 32, 51, 78–80, 101,
+  105) are likely universal. Higher attrs may differ per model.
+- **Output bitmask:** The attr 1 bit assignments (AC=0x01, DC12V=0x02, USB=0x04)
+  may differ on models with different port configurations.
+- **Battery module count:** Models without expansion battery support won't have
+  slot-indexed attrs.
+
+The `device_product_id` from BLE advertising could be used at integration setup
+to auto-configure which entities to create and which DPIDs to expose.
+
+---
+
+## HTTP REST API — Full Endpoint List
+
+All endpoints use base URL `http://api.upspowerstation.top` (unencrypted HTTP).
+Required query params on all requests: `token`, `platform=android`, `lang=en`,
+`systemVersion=36`.
+
+### Confirmed Endpoints (observed in pcap / app decompilation)
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/api/app/user/login` | Login, returns session token + MQTT creds | None (body has email+passwd) |
+| POST | `/api/app/user/registerSendCode` | Send registration verification code | None |
+| POST | `/api/app/user/register` | Register new account | None |
+| POST | `/api/app/user/forgetPasswordSendCode` | Password reset code | None |
+| POST | `/api/app/user/resetPasswd` | Reset password | None |
+| GET | `/api/app/user/info` | User profile info | Token |
+| POST | `/api/app/user/update` | Update user profile | Token |
+| POST | `/api/app/user/delete` | Delete account | Token |
+| GET | `/api/app/device/list` | All devices bound to account | Token |
+| GET | `/api/app/device/info` | Single device metadata | Token + device_id |
+| POST | `/api/app/device/sync` | Sync device registration | Token |
+| POST | `/api/app/device/rename` | Rename a device | Token |
+| POST | `/api/app/device/remove` | Unbind/remove a device | Token |
+| GET | `/api/app/device/model` | Full product model catalog (images, SKUs) | Token |
+| GET | `/api/app/device/share_list` | List of shared device access | Token |
+| POST | `/api/app/device/share` | Share device with another user | Token |
+| POST | `/api/app/device/share_remove` | Remove shared access | Token |
+| GET | `/api/app/config/weburl` | App configuration URLs | Token |
+| GET | `/api/app/config/version` | Latest app version info | Token |
+| GET | `/api/app/message/list` | User push notifications | Token |
+| GET | `/api/app/home/list` | Home/system list (grid-tied) | Token |
+| POST | `/api/app/home/create` | Create home/system | Token |
+| POST | `/api/app/home/update` | Update home/system | Token |
+| GET | `/api/app/home/detail` | Home system detail (for grid-tied setups) | Token |
+| GET | `/api/app/statistics/*` | Energy statistics (daily/monthly/yearly) | Token |
+| POST | `/api/app/ota/new_version` | Check for firmware OTA (see [Firmware Update](#firmware-update-ota)) | Token |
+| POST | `/api/app/ota/addcmd` | Submit OTA test command | Token |
+
+### TCP 8896 Broker Commands
+
+| Command | Direction | Description |
+|---------|-----------|-------------|
+| `cmd=auth` | Client → Broker | Authenticate with broker token |
+| `cmd=subscribe` | Client → Broker | Subscribe to device topic |
+| `cmd=publish` (with `cmd=2` in message) | Client → Broker → Device | Read telemetry attrs |
+| `cmd=publish` (with `cmd=3` in message) | Client → Broker → Device | Write device settings (Cmd3) |
+| `cmd=publish` (with `cmd=10` in message) | Device → Broker → Client | Telemetry response |
+| `cmd=keep` | Client → Broker | Client keepalive |
+| `cmd=ping` / `cmd=pong` | Device ↔ Broker | Device heartbeat |
+| `cmd=is_online` | Client → Broker | Check if device is reachable |

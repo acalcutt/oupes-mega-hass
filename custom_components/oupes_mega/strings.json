@@ -4,20 +4,20 @@
       "init": {
         "title": "OUPES Mega Options",
         "data": {
-          "cloud_email": "Cleanergy Cloud Email",
-          "cloud_password": "Cleanergy Cloud Password",
           "device_key": "Device Key",
           "continuous_connection": "Continuous BLE connection",
+          "poll_interval": "Poll interval (seconds)",
+          "stale_timeout": "Stale timeout (minutes)",
           "debug_attr_logging": "Debug: log all attribute values to CSV",
           "debug_raw_logging": "Debug: log raw BLE packets to CSV"
         },
         "data_description": {
-          "cloud_email": "Your Cleanergy app account email. Used once to fetch the device key — credentials are NOT stored.",
-          "cloud_password": "Your Cleanergy app account password. Used once to fetch the device key — credentials are NOT stored.",
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). Auto-populated from the OUPES cloud API when possible. You can also enter or override it manually.",
+          "device_key": "10-character hex key unique to your device (e.g. bd236b1695). You can override it here if needed.",
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling every 30 seconds. Captures infrequent sensor updates (e.g. battery voltage) but blocks the official app from connecting at the same time.",
-          "debug_attr_logging": "Write all received attribute values (including unknown ones and attr-78 mystery values) to oupes_mega_<addr>_attrs.csv in your HA config folder.",
-          "debug_raw_logging": "Write every raw BLE notification payload as hex to oupes_mega_<addr>_raw.csv in your HA config folder."
+          "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
+          "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
+          "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type (cmd1/cmd2_resp/cmd3_resp), packet index, and parsed values.",
+          "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
         }
       }
     }
@@ -85,6 +85,24 @@
       "pairing_complete": {
         "title": "Pairing successful!",
         "description": "Successfully paired with **{name}** ({address})."
+      },
+      "connection_settings": {
+        "title": "Connection Settings",
+        "description": "Configure how **{name}** ({address}) connects and behaves.",
+        "data": {
+          "continuous_connection": "Continuous BLE connection (recommended)",
+          "poll_interval": "Poll interval (seconds)",
+          "stale_timeout": "Stale timeout (minutes)",
+          "debug_attr_logging": "Debug: log parsed attribute values to CSV",
+          "debug_raw_logging": "Debug: log raw BLE packets to CSV"
+        },
+        "data_description": {
+          "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling. Recommended for reliable sensor data. Prevents the official Cleanergy app from connecting at the same time.",
+          "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
+          "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
+          "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type, packet index, and parsed values.",
+          "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
+        }
       }
     },
     "progress": {

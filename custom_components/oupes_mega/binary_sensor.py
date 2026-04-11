@@ -10,12 +10,12 @@ from homeassistant.components.binary_sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, STALE_TIMEOUT
+from .const import DOMAIN
 from .coordinator import OUPESMegaCoordinator
+from .sensor import _device_info
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -48,12 +48,6 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[OUPESBinarySensorDescription, ...] = (
         name="USB Output",
         icon="mdi:usb",
     ),
-    OUPESBinarySensorDescription(
-        key="unknown_flag_105",
-        attr=105,
-        name="AC Inverter Protection",
-        icon="mdi:shield-alert",
-    ),
 )
 
 
@@ -74,12 +68,7 @@ class OUPESMegaBinarySensor(
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.address)},
-            name=coordinator.device_name,
-            manufacturer="OUPES",
-            model="Mega 1",
-        )
+        self._attr_device_info = _device_info(coordinator)
 
     @property
     def available(self) -> bool:
@@ -91,7 +80,7 @@ class OUPESMegaBinarySensor(
         last = self.coordinator.last_successful_poll
         if last is None:
             return False
-        return datetime.now() - last <= STALE_TIMEOUT
+        return datetime.now() - last <= self.coordinator.stale_timeout
 
     @property
     def is_on(self) -> bool | None:

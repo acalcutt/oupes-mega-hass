@@ -5,7 +5,7 @@ import asyncio
 import csv
 import logging
 import time as _time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from bleak import BleakClient
@@ -23,11 +23,13 @@ from .const import (
     DOMAIN,
     MAX_ATTEMPTS,
     SCAN_DURATION,
-    STALE_TIMEOUT,
-    UPDATE_INTERVAL,
+    SERIES_SETTINGS,
+    model_name_from_product_id,
+    series_from_product_id,
 )
 from .protocol import (
     build_init_sequence,
+    build_query_commands,
     ATTR_MAP,
     EXT_BATTERY_ATTRS,
     EXT_BATTERY_MAP,
@@ -37,6 +39,7 @@ from .protocol import (
     NOTIFY_CHAR_UUID,
     WRITE_CHAR_UUID,
     parse_ble_packet,
+    parse_packet_sequence,
     build_output_command,  # noqa: F401 – re-exported for switch.py
 )
 
@@ -68,24 +71,38 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         name: str,
         *,
         device_key: str = "bd236b1695",
+        product_id: str = "",
         continuous: bool = False,
+        poll_interval_seconds: int = 30,
+        stale_timeout_minutes: int = 15,
         debug_attrs: bool = False,
         debug_raw: bool = False,
     ) -> None:
+        effective_interval = timedelta(seconds=poll_interval_seconds)
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_{address}",
-            update_interval=UPDATE_INTERVAL,
+            update_interval=effective_interval,
         )
         self.address = address
         self.device_name = name
+        self.product_id = product_id
+        self.model_name = model_name_from_product_id(product_id)
         self.last_successful_poll: datetime | None = None
+        self.stale_timeout = timedelta(minutes=stale_timeout_minutes)
         self._pending_command: bytes | None = None
         self._init_sequence = build_init_sequence(device_key)
         self._continuous = continuous
         self._live_data: OUPESData | None = None
         self._continuous_task: asyncio.Task | None = None
+        # Build Cmd2 query packets that read this device's supported settings.
+        # Split into small batches (7 DPIDs each) matching the Cleanergy app.
+        series = series_from_product_id(product_id)
+        supported_dpids = sorted(SERIES_SETTINGS.get(series, frozenset()))
+        self._settings_query_pkts: list[bytes] = (
+            build_query_commands(supported_dpids) if supported_dpids else []
+        )
         self._debug_attrs = debug_attrs
         self._debug_raw = debug_raw
         self._attr_csv_path: Path | None = None
@@ -104,7 +121,8 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             with path.open("a", newline="", encoding="utf-8") as f:
                 if is_new:
                     csv.writer(f).writerow(
-                        ["timestamp", "attr", "attr_hex", "value", "known",
+                        ["timestamp", "dir", "cmd", "pkt_idx", "last",
+                         "attr", "attr_hex", "value", "known",
                          "slot", "soc", "grid_w", "note"]
                     )
             _LOGGER.info("OUPES debug: attr log → %s", path)
@@ -114,8 +132,39 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             self._raw_csv_path = path
             with path.open("a", newline="", encoding="utf-8") as f:
                 if is_new:
-                    csv.writer(f).writerow(["timestamp", "hex"])
+                    csv.writer(f).writerow(
+                        ["timestamp", "dir", "cmd", "pkt_idx", "last", "hex"]
+                    )
             _LOGGER.info("OUPES debug: raw log → %s", path)
+
+    @staticmethod
+    def _classify_packet(data: bytearray) -> tuple[str, int, bool]:
+        """Return (cmd_label, pkt_index, is_last) for a BLE packet."""
+        if len(data) < 3:
+            return ("unknown", 0, True)
+        pkt_sn = data[1]
+        pkt_index = pkt_sn & 0x7F
+        is_last = bool(pkt_sn & 0x80)
+        if pkt_index == 0:
+            echo = data[2]
+            if echo == 0x02:
+                return ("cmd2_resp", pkt_index, is_last)
+            if echo == 0x03:
+                return ("cmd3_resp", pkt_index, is_last)
+            return ("cmd1", pkt_index, is_last)
+        return ("continuation", pkt_index, is_last)
+
+    def _debug_log_tx(self, pkt: bytes, label: str = "") -> None:
+        """Log an outgoing (TX) packet to the raw CSV."""
+        if not self._debug_raw or not self._raw_csv_path:
+            return
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        cmd = label or "tx"
+        try:
+            with self._raw_csv_path.open("a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow([ts, "TX", cmd, "", "", pkt.hex()])
+        except OSError:
+            pass
 
     def _debug_log_packet(
         self,
@@ -125,12 +174,19 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         slot: int,
         soc: int,
         grid_w: int,
+        *,
+        raw_logged: bool = False,
     ) -> None:
-        """Write debug rows for one notification packet."""
-        if self._debug_raw and self._raw_csv_path:
+        """Write debug rows for one received notification packet."""
+        cmd, pkt_index, is_last = self._classify_packet(raw)
+
+        if not raw_logged and self._debug_raw and self._raw_csv_path:
             try:
                 with self._raw_csv_path.open("a", newline="", encoding="utf-8") as f:
-                    csv.writer(f).writerow([ts, raw.hex()])
+                    csv.writer(f).writerow([
+                        ts, "RX", cmd, pkt_index,
+                        "Y" if is_last else "N", raw.hex(),
+                    ])
             except OSError as exc:
                 _LOGGER.debug("OUPES raw CSV write error: %s", exc)
 
@@ -155,7 +211,9 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 elif not known:
                     note = "unknown_attr"
                 rows.append([
-                    ts, attr, f"0x{attr:02x}", val,
+                    ts, "RX", cmd, pkt_index,
+                    "Y" if is_last else "N",
+                    attr, f"0x{attr:02x}", val,
                     "yes" if known else "NO",
                     slot if attr in EXT_BATTERY_ATTRS else "",
                     soc if soc >= 0 else "",
@@ -279,7 +337,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         """Hold an open BLE connection, pushing data to HA after each keepalive."""
         # Pre-seed attrs that the firmware only sends sporadically so their
         # entities hold a stable value instead of oscillating to Unknown.
-        attrs: dict[int, int] = {105: 0}  # AC Inverter Protection default = off
+        attrs: dict[int, int] = {105: 1}  # Charge Mode default = Fast (factory default)
         ext_batteries: dict[int, dict[int, int]] = {}
         current_slot = 1
         disconnected_event = asyncio.Event()
@@ -290,12 +348,11 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
 
         c_rolling_soc: list[int] = [-1]
         c_rolling_grid: list[int] = [0]
+        c_pkt_buf: list[bytearray] = []
 
-        def notification_handler(_sender: int, raw: bytearray) -> None:
+        def _apply_parsed(parsed: dict[int, int]) -> None:
+            """Merge parsed attribute values into running data dicts."""
             nonlocal current_slot
-            parsed = parse_ble_packet(raw)
-            if not parsed:
-                return
             if 101 in parsed:
                 slot = parsed[101]
                 current_slot = slot
@@ -316,12 +373,51 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     attrs[attr] = val
                     if attr == 30:
                         attrs["last_runtime_min"] = val
-            if self._debug_attrs or self._debug_raw:
+
+        def _flush_pkt_buf() -> None:
+            """Parse buffered packet sequence and apply results."""
+            if not c_pkt_buf:
+                return
+            parsed = parse_packet_sequence(c_pkt_buf)
+            if parsed:
+                _apply_parsed(parsed)
+                if self._debug_attrs:
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                    self._debug_log_packet(
+                        ts, c_pkt_buf[0], parsed,
+                        current_slot, c_rolling_soc[0], c_rolling_grid[0],
+                        raw_logged=True,
+                    )
+            c_pkt_buf.clear()
+
+        def notification_handler(_sender: int, raw: bytearray) -> None:
+            if len(raw) < 2:
+                return
+            pkt_sn = raw[1]
+            pkt_index = pkt_sn & 0x7F
+            is_last = bool(pkt_sn & 0x80)
+
+            # Log raw packet immediately (before buffering)
+            if self._debug_raw and self._raw_csv_path:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                self._debug_log_packet(
-                    ts, raw, parsed,
-                    current_slot, c_rolling_soc[0], c_rolling_grid[0],
-                )
+                cmd, pi, il = self._classify_packet(raw)
+                try:
+                    with self._raw_csv_path.open(
+                        "a", newline="", encoding="utf-8"
+                    ) as f:
+                        csv.writer(f).writerow([
+                            ts, "RX", cmd, pi,
+                            "Y" if il else "N", raw.hex(),
+                        ])
+                except OSError:
+                    pass
+
+            # Multi-packet reassembly: new idx-0 flushes any prior buffer
+            if pkt_index == 0:
+                _flush_pkt_buf()
+            c_pkt_buf.append(bytearray(raw))
+            if is_last:
+                _flush_pkt_buf()
 
         ble_device = async_ble_device_from_address(
             self.hass, self.address, connectable=True
@@ -369,12 +465,30 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     await client.write_gatt_char(
                         WRITE_CHAR_UUID, cmd, response=False
                     )
+                    self._debug_log_tx(cmd, "queued_cmd")
                     await asyncio.sleep(0.1)
                 except BleakError as exc:
                     _LOGGER.warning(
                         "Queued command error (continuous) on %s: %s",
                         self.address, exc,
                     )
+
+            # ── Send settings query (Cmd2) to read current setting values ──
+            for qpkt in self._settings_query_pkts:
+                if disconnected_event.is_set():
+                    break
+                try:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, qpkt, response=False
+                    )
+                    self._debug_log_tx(qpkt, "cmd2_query")
+                    await asyncio.sleep(0.15)
+                except BleakError as exc:
+                    _LOGGER.debug(
+                        "Settings query error (continuous) on %s: %s",
+                        self.address, exc,
+                    )
+                    break
 
             # Keepalive + data-push loop — runs until disconnected or cancelled
             await asyncio.sleep(KEEPALIVE_FIRST_DELAY)
@@ -441,7 +555,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         """
         # Pre-seed attrs that the firmware only sends sporadically so their
         # entities hold a stable value instead of oscillating to Unknown.
-        attrs: dict[int, int] = {105: 0}  # AC Inverter Protection default = off
+        attrs: dict[int, int] = {105: 1}  # Charge Mode default = Fast (factory default)
         ext_batteries: dict[int, dict[int, int]] = {}
         current_slot = 1
         got_data = False
@@ -456,12 +570,11 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
 
         rolling_soc: list[int] = [-1]
         rolling_grid: list[int] = [0]
+        o_pkt_buf: list[bytearray] = []
 
-        def notification_handler(_sender: int, raw: bytearray) -> None:
+        def _apply_parsed(parsed: dict[int, int]) -> None:
+            """Merge parsed attribute values into running data dicts."""
             nonlocal got_data, current_slot
-            parsed = parse_ble_packet(raw)
-            if not parsed:
-                return
             got_data = True
             if 101 in parsed:
                 slot = parsed[101]
@@ -483,12 +596,51 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     attrs[attr] = val
                     if attr == 30:
                         attrs["last_runtime_min"] = val
-            if self._debug_attrs or self._debug_raw:
+
+        def _flush_pkt_buf() -> None:
+            """Parse buffered packet sequence and apply results."""
+            if not o_pkt_buf:
+                return
+            parsed = parse_packet_sequence(o_pkt_buf)
+            if parsed:
+                _apply_parsed(parsed)
+                if self._debug_attrs:
+                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                    self._debug_log_packet(
+                        ts, o_pkt_buf[0], parsed,
+                        current_slot, rolling_soc[0], rolling_grid[0],
+                        raw_logged=True,
+                    )
+            o_pkt_buf.clear()
+
+        def notification_handler(_sender: int, raw: bytearray) -> None:
+            if len(raw) < 2:
+                return
+            pkt_sn = raw[1]
+            pkt_index = pkt_sn & 0x7F
+            is_last = bool(pkt_sn & 0x80)
+
+            # Log raw packet immediately (before buffering)
+            if self._debug_raw and self._raw_csv_path:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                self._debug_log_packet(
-                    ts, raw, parsed,
-                    current_slot, rolling_soc[0], rolling_grid[0],
-                )
+                cmd, pi, il = self._classify_packet(raw)
+                try:
+                    with self._raw_csv_path.open(
+                        "a", newline="", encoding="utf-8"
+                    ) as f:
+                        csv.writer(f).writerow([
+                            ts, "RX", cmd, pi,
+                            "Y" if il else "N", raw.hex(),
+                        ])
+                except OSError:
+                    pass
+
+            # Multi-packet reassembly: new idx-0 flushes any prior buffer
+            if pkt_index == 0:
+                _flush_pkt_buf()
+            o_pkt_buf.append(bytearray(raw))
+            if is_last:
+                _flush_pkt_buf()
 
         try:
             client = await establish_connection(
@@ -540,12 +692,29 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     await client.write_gatt_char(
                         WRITE_CHAR_UUID, cmd, response=False
                     )
+                    self._debug_log_tx(cmd, "queued_cmd")
                     await asyncio.sleep(0.1)
                 except BleakError as exc:
                     _LOGGER.warning(
                         "Failed to send queued command to %s: %s",
                         self.address, exc,
                     )
+
+            # ── Step 3c: send settings query (Cmd2) ─────────────────────
+            for qpkt in self._settings_query_pkts:
+                if disconnected_event.is_set():
+                    break
+                try:
+                    await client.write_gatt_char(
+                        WRITE_CHAR_UUID, qpkt, response=False
+                    )
+                    self._debug_log_tx(qpkt, "cmd2_query")
+                    await asyncio.sleep(0.15)
+                except BleakError as exc:
+                    _LOGGER.debug(
+                        "Settings query error on %s: %s", self.address, exc,
+                    )
+                    break
 
             # ── Step 4: keepalive loop + collect notifications ────────────
             async def keepalive_loop() -> None:
