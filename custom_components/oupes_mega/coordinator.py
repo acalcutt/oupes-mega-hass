@@ -18,7 +18,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     ATTR78_RUNTIME_MAX,
-    ATTR78_RUNTIME_SENTINEL,
     DOMAIN,
     MAX_ATTEMPTS,
     SCAN_DURATION,
@@ -197,12 +196,10 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                 known = attr in self._KNOWN_ATTRS
                 note = ""
                 if attr == 78:
-                    if val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
+                    if val <= self._runtime_max_minutes:
                         note = f"attr78_runtime {val}min"
-                    elif val == ATTR78_RUNTIME_SENTINEL:
-                        note = "attr78_sentinel (99h placeholder, not discharging)"
                     else:
-                        note = f"attr78_other {val}"
+                        note = f"attr78_capped {val}min → {self._runtime_max_minutes}min"
                 elif not known:
                     note = "unknown_attr"
                 rows.append([
@@ -360,12 +357,12 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             for attr, val in parsed.items():
                 if attr in EXT_BATTERY_ATTRS:
                     ext_batteries[current_slot][attr] = val
-                    if attr == 78 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
-                        ext_batteries[current_slot]["last_runtime_min"] = val
+                    if attr == 78:
+                        ext_batteries[current_slot]["last_runtime_min"] = min(val, self._runtime_max_minutes)
                 elif attr != 101:
                     attrs[attr] = val
-                    if attr == 30 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
-                        attrs["last_runtime_min"] = val
+                    if attr == 30:
+                        attrs["last_runtime_min"] = min(val, self._runtime_max_minutes)
 
         def _flush_pkt_buf() -> None:
             """Parse buffered packet sequence and apply results."""
@@ -581,12 +578,12 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
             for attr, val in parsed.items():
                 if attr in EXT_BATTERY_ATTRS:
                     ext_batteries[current_slot][attr] = val
-                    if attr == 78 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
-                        ext_batteries[current_slot]["last_runtime_min"] = val
+                    if attr == 78:
+                        ext_batteries[current_slot]["last_runtime_min"] = min(val, self._runtime_max_minutes)
                 elif attr != 101:
                     attrs[attr] = val
-                    if attr == 30 and val <= self._runtime_max_minutes and val != ATTR78_RUNTIME_SENTINEL:
-                        attrs["last_runtime_min"] = val
+                    if attr == 30:
+                        attrs["last_runtime_min"] = min(val, self._runtime_max_minutes)
 
         def _flush_pkt_buf() -> None:
             """Parse buffered packet sequence and apply results."""

@@ -277,6 +277,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._pairing_error = None
 
         if user_input is not None:
+            if user_input.get("go_back"):
+                return await self.async_step_choose_method()
             new_key = user_input.get(CONF_DEVICE_KEY, "").strip().lower()
             if not new_key:
                 new_key = _generate_device_key()
@@ -293,6 +295,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_DEVICE_KEY, default=suggested_key): str,
+                    vol.Optional("go_back", default=False): bool,
                 }
             ),
             description_placeholders={
@@ -367,6 +370,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            if user_input.get("go_back"):
+                return await self.async_step_choose_method()
             raw_key = user_input.get(CONF_DEVICE_KEY, "").strip().lower()
             if not _valid_device_key(raw_key):
                 errors[CONF_DEVICE_KEY] = "invalid_device_key"
@@ -378,7 +383,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="existing_key",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_DEVICE_KEY): str,
+                    vol.Optional(CONF_DEVICE_KEY, default=""): str,
+                    vol.Optional("go_back", default=False): bool,
                 }
             ),
             description_placeholders={
@@ -397,6 +403,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            if user_input.get("go_back"):
+                return await self.async_step_choose_method()
             email = user_input.get("cloud_email", "").strip()
             password = user_input.get("cloud_password", "").strip()
 
@@ -419,8 +427,9 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="cloud_login",
             data_schema=vol.Schema(
                 {
-                    vol.Required("cloud_email"): str,
-                    vol.Required("cloud_password"): str,
+                    vol.Optional("cloud_email", default=""): str,
+                    vol.Optional("cloud_password", default=""): str,
+                    vol.Optional("go_back", default=False): bool,
                 }
             ),
             description_placeholders={
@@ -438,6 +447,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Let the user choose connection mode before creating the entry."""
         if user_input is not None:
+            if user_input.get("go_back"):
+                return await self.async_step_choose_method()
             continuous = user_input.get(CONF_CONTINUOUS, True)
             poll_interval = int(user_input.get(
                 CONF_POLL_INTERVAL, UPDATE_INTERVAL.total_seconds()
@@ -497,6 +508,7 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     )),
                     vol.Required(CONF_DEBUG_ATTRS, default=False): bool,
                     vol.Required(CONF_DEBUG_RAW, default=False): bool,
+                    vol.Optional("go_back", default=False): bool,
                 }
             ),
             description_placeholders={

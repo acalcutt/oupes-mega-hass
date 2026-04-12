@@ -17,7 +17,7 @@
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling every 30 seconds. Captures infrequent sensor updates (e.g. battery voltage) but blocks the official app from connecting at the same time.",
           "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
           "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
-          "runtime_max_minutes": "Maximum plausible runtime value in minutes. Firmware reports values above this as noise during charging or idle — they are silently dropped so sensors show Unknown instead. Default: 6000 (100 h). Increase if you have a large device stack capable of genuine runtimes over 100 h.",
+          "runtime_max_minutes": "Maximum plausible runtime value in minutes. When firmware reports a value above this (e.g. during charging or idle), the sensor is clamped to this value instead of going Unknown. Default: 5940 (99 h). Increase if you have a large device stack capable of genuine runtimes over 99 h.",
           "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type (cmd1/cmd2_resp/cmd3_resp), packet index, and parsed values.",
           "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
         }
@@ -52,20 +52,24 @@
         "title": "Create New Device Key",
         "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The IoT module (Wi-Fi/BLE) will turn off — **press the IoT button once to turn it back on**\n4. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.",
         "data": {
-          "device_key": "Device Key (10 hex characters)"
+          "device_key": "Device Key (10 hex characters)",
+          "go_back": "← Go back and choose a different method"
         },
         "data_description": {
-          "device_key": "A random key has been pre-filled. You can keep it or enter your own 10-character hex key."
+          "device_key": "A random key has been pre-filled. You can keep it or enter your own 10-character hex key.",
+          "go_back": "Check this and click Submit to return to the method selection screen."
         }
       },
       "existing_key": {
         "title": "Enter Existing Device Key",
         "description": "Enter the 10-character hex device key for **{name}** ({address}).\n\nYou can find this key by:\n- Running `adb logcat | findstr 8888888888888888888` while opening the Cleanergy app\n- Checking a btsnoop/PCAPdroid capture of the Cleanergy app traffic\n- Using the Cleanergy cloud API via the PowerShell script in the README",
         "data": {
-          "device_key": "Device Key"
+          "device_key": "Device Key",
+          "go_back": "← Go back and choose a different method"
         },
         "data_description": {
-          "device_key": "10-character hex key unique to your device (e.g. bd236b1695)."
+          "device_key": "10-character hex key unique to your device (e.g. bd236b1695).",
+          "go_back": "Check this and click Submit to return to the method selection screen."
         }
       },
       "cloud_login": {
@@ -73,11 +77,13 @@
         "description": "Log in with your Cleanergy app credentials to automatically fetch the device key for **{name}** ({address}).\n\nYour credentials are used **once** to retrieve the key and are **not stored**.\n\n⚠️ The Cleanergy API uses unencrypted HTTP — this mirrors the official app's own behaviour.",
         "data": {
           "cloud_email": "Cleanergy Email",
-          "cloud_password": "Cleanergy Password"
+          "cloud_password": "Cleanergy Password",
+          "go_back": "← Go back and choose a different method"
         },
         "data_description": {
           "cloud_email": "The email address you use to log in to the Cleanergy app.",
-          "cloud_password": "Your Cleanergy app password. Used once, not stored."
+          "cloud_password": "Your Cleanergy app password. Used once, not stored.",
+          "go_back": "Check this and click Submit to return to the method selection screen."
         }
       },
       "pairing": {
@@ -97,15 +103,17 @@
           "stale_timeout": "Stale timeout (minutes)",
           "runtime_max_minutes": "Runtime noise filter (minutes)",
           "debug_attr_logging": "Debug: log parsed attribute values to CSV",
-          "debug_raw_logging": "Debug: log raw BLE packets to CSV"
+          "debug_raw_logging": "Debug: log raw BLE packets to CSV",
+          "go_back": "← Go back and choose a different method"
         },
         "data_description": {
           "continuous_connection": "Keep the Bluetooth connection open permanently instead of polling. Recommended for reliable sensor data. Prevents the official Cleanergy app from connecting at the same time.",
           "poll_interval": "How often (in seconds) to connect and pull sensor data when not using continuous mode. Range: 10–600. Default: 30.",
           "stale_timeout": "How long (in minutes) to keep showing the last known values after a failed poll before marking entities as unavailable. Range: 1–120. Default: 15.",
-          "runtime_max_minutes": "Maximum plausible runtime value in minutes. Firmware reports values above this as noise during charging or idle — they are silently dropped so sensors show Unknown instead. Default: 6000 (100 h). Increase if you have a large device stack capable of genuine runtimes over 100 h.",
+          "runtime_max_minutes": "Maximum plausible runtime value in minutes. When firmware reports a value above this (e.g. during charging or idle), the sensor is clamped to this value instead of going Unknown. Default: 5940 (99 h). Increase if you have a large device stack capable of genuine runtimes over 99 h.",
           "debug_attr_logging": "Log parsed attribute values with packet classification to a CSV in your HA config folder. Includes direction (TX/RX), command type, packet index, and parsed values.",
-          "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses."
+          "debug_raw_logging": "Log every raw BLE packet (TX and RX) with direction and command classification to a CSV in your HA config folder. Useful for diagnosing missing settings responses.",
+          "go_back": "Check this and click Submit to return to the method selection screen."
         }
       }
     },

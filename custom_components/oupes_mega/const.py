@@ -45,13 +45,13 @@ CONF_DEBUG_ATTRS = "debug_attr_logging"
 # Debug: log every raw BLE notification payload as hex to a separate CSV.
 CONF_DEBUG_RAW = "debug_raw_logging"
 
-# Attr-78 / attr-30 range boundaries (used in coordinator)
-ATTR78_RUNTIME_MAX      = 6000  # Default upper bound for runtime values (minutes).
-                                # Values above this are treated as firmware noise and
-                                # silently dropped. Overridden per-device via
-                                # CONF_RUNTIME_MAX in the options flow.
-ATTR78_RUNTIME_SENTINEL = 5940  # 99 * 60 — firmware "99h" placeholder sent when
-                                # charging or runtime is not estimable; not a real value
+# Attr-78 / attr-30 runtime cap (used in coordinator)
+ATTR78_RUNTIME_MAX = 5940  # Default upper bound for runtime values (minutes) =
+                           # 99 * 60 = 99 h. Values above this are clamped to
+                           # this value rather than dropped, so sensors always
+                           # show the cap instead of Unknown when firmware
+                           # reports noise during charging/idle. Overridden
+                           # per-device via CONF_RUNTIME_MAX in the options flow.
 
 # Config entry option key — user-settable upper bound (minutes) for runtime attrs
 # (attr 30 and attr 78). Values above this are filtered as firmware noise. Default: 6000.

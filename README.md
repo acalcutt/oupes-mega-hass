@@ -132,9 +132,9 @@ retrieved key is saved.
 | Total Input Power | 21 | W | Grid + solar combined |
 | Grid Input Power | 22 | W | Grid only |
 | Solar Input Power | 23 | W | MPPT solar input |
-| Remaining Runtime | 30 | min | At current discharge rate (inaccurate under variable load) |
+| Remaining Runtime | 30 | min | At current discharge rate. Clamped to the configured runtime cap (default 5940 min / 99 h) when charging or idle. |
 | Main Unit Temperature | 32 | °F | Internal temperature (÷10; e.g. raw 963 → 96.3 °F) |
-| External Battery 1–N Runtime | 78 | min | Per battery module; 5940 = charging/idle max |
+| External Battery 1–N Runtime | 78 | min | Per battery module. Clamped to the configured runtime cap (default 5940 min / 99 h) when charging or idle. |
 | External Battery 1–N Charge | 79 | % | Direct battery percentage (raw value = %) |
 | External Battery 1–N Temperature | 80 | °F | Per module temperature (÷10; e.g. 878 → 87.8 °F) |
 | Connected Expansion Batteries | 51 | — | Count of connected expansion battery packs (0–2 on Mega 1) |
