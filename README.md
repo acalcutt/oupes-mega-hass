@@ -350,6 +350,50 @@ The script replicates the exact BLE pairing protocol the Cleanergy app uses
 (AUTH → handshake polling → CLAIM with key + dummy MQTT token), with no cloud
 or app dependency. Typical pairing completes in one cycle (~18 seconds).
 
+### WiFi provisioning
+
+The OUPES Mega 1 has an on-board ESP32 WiFi module. The Cleanergy app
+provisions WiFi credentials over BLE during the AUTH (0x01) handshake —
+the SSID and password are encoded into the first three AUTH packets alongside
+the device key.
+
+`pair_device.py` supports WiFi provisioning via `--ssid` and `--psk`:
+
+```powershell
+# Pair + provision WiFi in one step
+python debug_info/pair_device.py <MAC> --key <key> --ssid "EIHOME_GUEST_2-4GHz" --psk "sansui4000"
+
+# Specify a different server region (default: wp-cn)
+python debug_info/pair_device.py <MAC> --key <key> --ssid "MyWiFi" --psk "pass123" --region wp-cn
+```
+
+**WiFi AUTH packet layout** (reverse-engineered from Cleanergy app btsnoop captures):
+
+| Pkt | Index | Content |
+|-----|-------|---------|
+| 0 | `0x00` | `[2]`=0x01, `[3]`=0x99+len(psk), `[4:19]`=SSID first 15 chars |
+| 1 | `0x01` | `[2:19]`=SSID remaining chars (null-padded) |
+| 2 | `0x02` | `[2:19]`=WiFi password (null-padded) |
+| 3–5 | `0x03`–`0x05` | Zero payload |
+| 6 | `0x06` | `[2:4]`=length header, `[4:14]`=key, `[14:19]`=token prefix |
+| 7 | `0x07` | `[2:19]`=token bytes 5–21 |
+| 8 | `0x08` | `[2:10]`=token bytes 22–29, rest zeros |
+| 9 | `0x89` | `[4:9]`=region code (e.g., `wp-cn`) |
+| 10 | `0x80` | Negotiation close (same as BLE-only) |
+
+When `--ssid` / `--psk` are omitted, the standard BLE-only AUTH is sent
+(packets 0–1 filled with `0x01` padding, packets 7–8 and 0x89 all zeros),
+and WiFi remains unconfigured.
+
+**Limits:** SSID max 32 chars, password max 17 chars.
+
+> **Note:** After the device accepts the WiFi credentials over BLE, it
+> attempts to connect to the specified network. The device connects outbound
+> to the cloud broker at `47.252.10.9:8896`, but **only while a phone
+> is BLE-paired** — the cloud connection drops when BLE disconnects.
+> WiFi provisioning is currently useful for cloud integration or future
+> local-WiFi communication; it is not required for BLE-only HA operation.
+
 ### Finding an existing key (without cloud login)
 
 If the device is already paired and you need to recover the key:
