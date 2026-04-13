@@ -30,10 +30,32 @@ from pair_device import (
     KEEPALIVE,
     build_auth,
     _crc8,
+    _ts_pkt,
 )
 
 TIMEOUT_CONNECT = 20.0
 TIMEOUT_SCAN = 15.0
+
+
+def _auth_resp(data: bytes) -> bytes:
+    """Build a 20-byte AUTH RESP packet: cmd=0x01, sub=0x80, then payload, with CRC."""
+    p = bytearray(20)
+    p[0] = 0x01
+    p[1] = 0x80
+    for i, b in enumerate(data):
+        p[2 + i] = b
+    p[19] = _crc8(bytes(p[:19]))
+    return bytes(p)
+
+
+# Post-credential handshake packets observed from Cleanergy app btsnoop:
+# These subscribe to telemetry attributes and activate the WiFi TCP connection.
+AUTH_RESP_CONFIRM  = _auth_resp(b'\x02\x01\x01')           # idx=1 status=1 (confirm auth)
+AUTH_RESP_POLL     = _auth_resp(b'\x03\x02\x54\x01')       # idx=2 status=0x54 (wifi poll)
+AUTH_RESP_SUB9     = _auth_resp(b'\x02\x09\x01\x02\x03\x04\x05\x06\x07\x08\x09')  # subscribe attrs 1-9
+AUTH_RESP_SUB5     = _auth_resp(b'\x02\x05\x15\x16\x17\x1e\x20')                   # subscribe attrs 0x15..0x20
+AUTH_RESP_CFG33    = _auth_resp(b'\x02\x01\x33')            # config 0x33
+AUTH_RESP_ACTIVATE = _auth_resp(b'\x04\x01\x01')            # activate telemetry
 
 
 async def provision_wifi(mac: str, key: str, ssid: str, psk: str,
@@ -113,23 +135,72 @@ async def provision_wifi(mac: str, key: str, ssid: str, psk: str,
                 await client.write_gatt_char(WRITE_CHAR, pkt, response=False)
                 await asyncio.sleep(0.08)
 
-            # Wait for response
+            # Wait for initial response
             print(f"\n  >> Waiting for device response...")
-            for _ in range(50):  # up to 5 seconds
+            for _ in range(20):  # up to 2 seconds
                 await asyncio.sleep(0.1)
                 if wifi_accepted or wifi_rejected:
                     break
 
-            # Send keepalive to confirm
-            if wifi_accepted:
-                await client.write_gatt_char(WRITE_CHAR, KEEPALIVE, response=False)
-                await asyncio.sleep(2.0)
+            # ── Post-credential handshake (from btsnoop analysis) ──
+            # The app sends AUTH RESP confirm, WiFi poll, attribute
+            # subscriptions, and activation commands.  Without these
+            # the device stays in WiFi-idle (gratuitous ARPs only).
 
-            # If no explicit accept/reject, wait a bit longer
-            if not wifi_accepted and not wifi_rejected:
-                print(f"  >> No explicit WiFi ACK yet, sending keepalive and waiting...")
-                await client.write_gatt_char(WRITE_CHAR, KEEPALIVE, response=False)
-                await asyncio.sleep(5.0)
+            print(f"\n  >> Sending post-credential handshake...")
+
+            # Confirm auth
+            print(f"     AUTH RESP confirm:  {AUTH_RESP_CONFIRM.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_CONFIRM, response=False)
+            await asyncio.sleep(0.1)
+
+            # WiFi poll (idx=2 status=0x54 'T')
+            print(f"     AUTH RESP poll:     {AUTH_RESP_POLL.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_POLL, response=False)
+            await asyncio.sleep(0.1)
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_POLL, response=False)
+            await asyncio.sleep(0.5)
+
+            # Subscribe to attribute groups
+            print(f"     AUTH RESP sub9:     {AUTH_RESP_SUB9.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_SUB9, response=False)
+            await asyncio.sleep(0.05)
+            print(f"     AUTH RESP sub5:     {AUTH_RESP_SUB5.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_SUB5, response=False)
+            await asyncio.sleep(0.05)
+            print(f"     AUTH RESP cfg33:    {AUTH_RESP_CFG33.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_CFG33, response=False)
+            await asyncio.sleep(0.05)
+
+            # Activate telemetry (sent twice, matching app behavior)
+            print(f"     AUTH RESP activate: {AUTH_RESP_ACTIVATE.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_ACTIVATE, response=False)
+            await asyncio.sleep(0.05)
+            await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_ACTIVATE, response=False)
+            await asyncio.sleep(0.05)
+
+            # Time sync
+            ts_pkt = _ts_pkt(0x01)
+            print(f"     Time sync:         {ts_pkt.hex()}")
+            await client.write_gatt_char(WRITE_CHAR, ts_pkt, response=False)
+            await asyncio.sleep(0.1)
+
+            # Continue polling WiFi status for ~30s (matching app's 5s interval)
+            print(f"\n  >> Polling WiFi/cloud status (30s, every 5s)...")
+            for poll_i in range(6):
+                await client.write_gatt_char(WRITE_CHAR, AUTH_RESP_POLL, response=False)
+                for _ in range(50):  # 5s in 100ms increments
+                    await asyncio.sleep(0.1)
+                    if got_telemetry:
+                        print(f"     Poll {poll_i+1}: telemetry flowing!")
+                        break
+                if got_telemetry:
+                    break
+                print(f"     Poll {poll_i+1}/6: waiting...")
+
+            # Send keepalive
+            await client.write_gatt_char(WRITE_CHAR, KEEPALIVE, response=False)
+            await asyncio.sleep(2.0)
 
             try:
                 await client.stop_notify(NOTIFY_CHAR)

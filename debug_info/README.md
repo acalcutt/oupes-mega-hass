@@ -17,7 +17,9 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [Cloud Login API](#cloud-login-api)
   - [TCP Telemetry Channel (Port 8896)](#tcp-telemetry-channel-port-8896)
   - [Required Credentials](#required-credentials)
-  - [Connection Sequence](#connection-sequence)
+  - [Device Firmware Boot Sequence (SiBo)](#device-firmware-boot-sequence-sibo--wp-cndoitingcom)
+  - [Device-Side Broker Protocol](#device-side-broker-protocol)
+  - [Connection Sequence (App-Side)](#connection-sequence-app-side)
   - [Requesting Telemetry](#requesting-telemetry)
   - [Working Python Example](#working-python-example)
 - [Bluetooth LE (BLE)](#bluetooth-le-ble)
@@ -67,9 +69,9 @@ The OUPES Mega 1 communicates via two parallel channels:
 ```
 
 **Key findings:**
-- The device only maintains its cloud TCP connection **while actively paired via BLE to the app**. When no phone is BLE-connected, the device drops its cloud session entirely. This was confirmed by observing `num=0` (zero subscribers) on publish responses even when the device was reachable on the local network — and the official app experienced the same `num=0` failure simultaneously.
-- While cloud-connected, the device sends a `cmd=ping` / `cmd=pong` heartbeat approximately every 90 seconds.
+- **The device firmware independently maintains its cloud connection.** Contrary to earlier observations, the device connects to the TCP broker on its own during the boot sequence — it does NOT require an active BLE connection from the app. The earlier `num=0` observations were due to the device not being bound (the SiBo bind step was missing). Confirmed via pfSense PCAP (2026-04-13): device boots → unbind → bind → TCP broker connect → telemetry streaming, all without any app interaction.
 - The device does **not** push telemetry autonomously — a subscribed client must explicitly poll attribute groups to trigger a `cmd=10` response.
+- While cloud-connected, the device sends a `cmd=ping` / `cmd=pong` heartbeat approximately every 90 seconds.
 - The BLE channel is fully independent and does not require cloud connectivity — it is the **recommended approach** for a permanent Home Assistant integration.
 
 ---
@@ -215,7 +217,105 @@ http_token = <user account token from HTTP API requests>
 
 ---
 
-### Connection Sequence
+### Device Firmware Boot Sequence (SiBo / wp-cn.doiting.com)
+
+> **Confirmed via pfSense PCAP 2026-04-13** — with NAT rules disabled, observing the device talking to the real OUPES cloud servers.
+
+The device firmware (DoHome ESP32, `User-Agent: DoHome-HTTP-Client/2.1`) performs an HTTP boot sequence on **plain HTTP port 80** to `wp-cn.doiting.com` (resolves to `8.135.109.78`) before connecting to the TCP broker. This is separate from the app's HTTPS API on port 443.
+
+**Boot sequence:**
+
+```
+1. Device powers on, obtains DHCP lease, resolves wp-cn.doiting.com
+2. POST /api/device/unbind  (plain HTTP to 8.135.109.78:80)
+3. POST /api/device/bind    (plain HTTP to 8.135.109.78:80)
+4. Parse bind response → extract tcp_ip and tcp_port
+5. TCP connect to tcp_ip:tcp_port (broker)
+6. cmd=subscribe&from=device&topic=control_<device_id>&...
+7. cmd=keep&device_id=...&device_key=...
+8. Begin publishing telemetry (cmd=10)
+```
+
+**Bind request** (`POST /api/device/bind`):
+```json
+{
+  "device_id": "756173148cd0b2a8e142",
+  "device_key": "bd236b1695",
+  "device_product_id": "O44A5o",
+  "user_token": "siimPDqjxJCRBelB2cf10ILo43Lyvk",
+  "lat": "0",
+  "lng": "0",
+  "device_firmware_version": "1.2.0",
+  "additional_detail": {
+    "net_mac": "8cd0b2a8e142",
+    "bt_mac": "8cd0b2a8e144",
+    "ap": "EIHOME_GUEST_2-4GHz"
+  }
+}
+```
+
+**Bind response** (real cloud):
+```json
+{
+  "ret": "1",
+  "desc": "Success",
+  "info": {
+    "uid": "60859",
+    "tcp_ip": "47.252.10.9",
+    "tcp_port": 8896,
+    "timestamp": "1776055648",
+    "timezone_offset": 0
+  }
+}
+```
+
+> **Critical:** The `info.tcp_ip` and `info.tcp_port` fields tell the device where to connect for the TCP broker. Without these fields, the device has no broker address and never connects. The `ret` code is `"1"` (string), matching the SiBo app API convention.
+
+**Timing observed (PCAP):**
+| Time | Event |
+|------|-------|
+| 04:46:57 | POST /api/device/unbind |
+| 04:47:26 | POST /api/device/bind (289-byte JSON body) |
+| 04:47:29 | Bind response received (ret:"1" with tcp_ip/tcp_port) |
+| 04:47:29.383 | TCP SYN to 47.252.10.9:8896 |
+| 04:47:29.462 | cmd=subscribe sent to broker |
+| 04:47:29.486 | cmd=keep sent |
+| 04:47:29.563 | First cmd=publish (telemetry attr [0] init) |
+
+The device connects to the broker within **300ms** of receiving the bind response.
+
+---
+
+### Device-Side Broker Protocol
+
+The device firmware uses a slightly different protocol from the app when talking to the TCP broker:
+
+**Device subscribe** (note `from=device` and `control_` topic prefix):
+```
+cmd=subscribe&from=device&topic=control_<device_id>&device_id=<device_id>&device_key=<device_key>\r\n
+```
+
+**Device keep** (includes credentials):
+```
+cmd=keep&device_id=<device_id>&device_key=<device_key>\r\n
+```
+
+**Device publish** (telemetry, uses `device_` topic prefix):
+```
+cmd=publish&topic=device_<device_id>&device_id=<device_id>&device_key=<device_key>&message=<json>\r\n
+```
+
+**Server responses** (identical for device and app):
+```
+cmd=subscribe&topic=control_<device_id>&res=1\r\n
+cmd=keep&timestamp=<unix_seconds>&res=1\r\n
+```
+
+> **Note on `device_key`:** The device_key used by the firmware in broker messages (`bd236b1695`) may differ from the device_key returned by the app's HTTP API (`e98ff526ad`). The firmware key is the one sent in the bind request and used in all subsequent broker communication.
+
+---
+
+### Connection Sequence (App-Side)
 
 The full sequence to establish a working telemetry session on TCP 8896:
 
@@ -1250,12 +1350,12 @@ Because the firmware update protocol relies on unencrypted HTTP URLs and has no 
 - **Attr 105 = Charge Mode (0 = Slow, 1 = Fast).** Writable via Cmd3; the HA integration exposes it as a "Fast Charge" switch on all Mega and Guardian series. The device default / pre-seed state is `1` (Fast). The earlier interpretation as an "AC Inverter Protection flag" on the Mega 1 was incorrect — correlating `1` readings with thermal events was coincidental since Fast mode is the default and the device was almost always in Fast mode during testing. **Confirmed:** APK source (`S2_V2SettingFragment`, `D2SettingFragment`) shows DPID 105 as the charge mode selection across all D2/S2 model families. Pre-condition for toggling: AC output must be off and AC input power = 0W (enforced in the HA integration via `HomeAssistantError`). a complete deep-discharge session (97%→0% SoC; BLE logging gap from 15%→0% during which the device ran unmonitored for ~2h43min) produced zero attr 105 events throughout. At the moment SoC=0% was first logged, attr 4=500W and attr 5=506W — the device was still actively outputting ~500W with all outputs on (attr 1=7) and attr 105=0. Peak temperature was 95.6°F (raw 956) across this entire run — no protection triggered. Earlier sessions that did trigger protection (raw attr 32 rising to 970 = 97.0°F) were almost certainly thermal: the device was in a warmer environment or enclosure. The protection threshold lies somewhere above 95.6°F / 35.3°C.
 - **Attrs 21 and 22 are likely Total Input and Grid Input respectively.** Attr 21 is consistently exactly 1W higher than attr 22 across all captures and live readings (e.g. 36 vs 35, 30 vs 29). This is consistent with attr 21 = total charging input (grid + solar) and attr 22 = grid-only input. The 1W difference is the MPPT noise floor from attr 23 — confirmed to appear in the official app even with no panel connected, and confirmed in live CSV data (attr 23 = 1 during grid-on periods, 0 when grid is off). The original mapping (21 = Grid, 22 = Solar) was based on matching "Grid 30W" in the app against a value of 30, but attr 22 = 29 at that time is equally plausible as the actual grid reading. **Confirmed: attr 21 is a system-wide total that includes solar power entering connected B2 expansion batteries via their secondary MPPT ports.** 19-hour log (2026-04-05 23:42 – 2026-04-06 18:54) confirms this definitively at the 14:04–14:30 window: AC disconnected at 14:05 (attr 22 → 0); chain cable remained physically connected — attr 54 slot 2 briefly showed ~104W as the B2 chain-discharged into the Mega during the AC-off handover, then naturally dropped to 0 at ~14:07 as the solar MPPT took over. Attr 53 slot 2 and attr 21 then tracked each other in per-minute lockstep: 14:08: 7W, 14:09: 9W, 14:10: 31W, 14:11: 42W, 14:12: 50W, 14:13: 58W, 14:14: 93W, 14:15: 103W, stable ~102–107W until 14:30 when both simultaneously dropped to 0. Attr 22 and attr 23 remained 0 throughout the solar ramp. Attr 53 slot 1 = 0 throughout — slot 1 has no solar panel. Notable: attr 23 (main unit solar input) stayed 0 throughout — B2 secondary-port solar does NOT appear in attr 23; it only rolls up into attr 21 directly.
 - **Solar port and attr 23 testing used a DC battery source,** not a real solar panel (no panel available). The port accepted DC input from the battery correctly; attr 23 reflected the input wattage as expected. Attr 23 = 1 (noise floor) is common during grid-on periods with nothing connected — this matches what the official app displays.
-- **Cloud connection is BLE-dependent.** The device only connects to the cloud broker while a phone is actively BLE-paired via the Cleanergy app. With no BLE connection, all publish requests return `num=0`. This was confirmed by the official app experiencing the same failure simultaneously. **This makes the WiFi/cloud path unsuitable for unattended Home Assistant integration.**
+- **~~Cloud connection is BLE-dependent.~~** **CORRECTED (2026-04-13):** The device firmware maintains its own independent cloud TCP broker connection via the SiBo bind sequence (unbind → bind → TCP connect). It does NOT require an active BLE connection from the app. The earlier `num=0` observations were caused by the device not completing the SiBo bind (our intercepting HTTP server was returning an incomplete response missing the `tcp_ip`/`tcp_port` fields). With the correct bind response, the device connects to the broker within 300ms and streams telemetry continuously. The BLE connection from the app triggers a separate *app-side* broker subscription (`from=control`) which is relayed alongside the device's own telemetry stream.
 - **Broker token appears long-lived.** The same token was observed across multiple separate capture sessions. It does not appear to be a short-lived session token.
 - **Client keepalive is `cmd=keep`**, not `cmd=is_online`. The app sends `cmd=keep\r\n` and receives `cmd=keep&timestamp=...&res=1`. The `cmd=is_online` command is a separate per-device check sent every ~5 seconds by the app.
 - **`num=0` vs `num=1`** in publish responses indicates whether the device received the message. `num=1` means the device is cloud-connected and got the request; `num=0` means it is not reachable via the broker.
 - **UDP port 6095:** The app broadcasts `{"cmd":0,"pv":0,"sn":"...","msg":{}}` to `255.255.255.255:6095` but the device does not respond. One-way only, not useful for data retrieval.
-- **`wp-cn.doiting.com`:** The app connects to this host over TLS 443 at startup. This is where the broker auth token is obtained. The connection is encrypted and cannot be read without TLS interception.
+- **`wp-cn.doiting.com` (8.135.109.78):** Serves two roles: (1) The **app** connects over TLS 443 at startup to obtain a broker auth token (encrypted, cannot be read without TLS interception). (2) The **device firmware** connects on plain HTTP port 80 for the bind/unbind sequence (sends device_id, device_key, product_id, firmware_version; receives tcp_ip/tcp_port for broker). For HA interception, pfSense NAT forwards both `:80 → HA:8897` (HTTP intercept server) and `:443 → HA:8898` (SiBo HTTPS mock).
 - **Control via attr 84:** The app was observed sending `cmd=3` (write) with `attr=[84], data={"84":1}` — likely toggles AC output. Other control attrs are unconfirmed.
 - **BLE connection is fully confirmed working.** The complete connection sequence (1.8s GATT delay → CCCD write → init sequence → keepalive every 10s) has been validated live against the device, receiving 72+ telemetry packets across a sustained 27s session. See [`scan_ble.py`](scan_ble.py).
 - **BLE keepalive is mandatory.** Without sending `0180030254010000000000000000000000000076` at least once every 10 seconds, the device disconnects at exactly t+10 s. Confirmed across multiple btsnoop captures — the Cleanergy app sends it every 10 s starting ~6 s after init.
