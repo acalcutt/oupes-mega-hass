@@ -20,6 +20,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
   - [Device Firmware Boot Sequence (SiBo)](#device-firmware-boot-sequence-sibo--wp-cndoitingcom)
   - [Device-Side Broker Protocol](#device-side-broker-protocol)
   - [Connection Sequence (App-Side)](#connection-sequence-app-side)
+  - [WiFi Streaming Protocol](#wifi-streaming-protocol)
   - [Requesting Telemetry](#requesting-telemetry)
   - [Working Python Example](#working-python-example)
 - [Bluetooth LE (BLE)](#bluetooth-le-ble)
@@ -70,9 +71,9 @@ The OUPES Mega 1 communicates via two parallel channels:
 
 **Key findings:**
 - **The device firmware independently maintains its cloud connection.** Contrary to earlier observations, the device connects to the TCP broker on its own during the boot sequence — it does NOT require an active BLE connection from the app. The earlier `num=0` observations were due to the device not being bound (the SiBo bind step was missing). Confirmed via pfSense PCAP (2026-04-13): device boots → unbind → bind → TCP broker connect → telemetry streaming, all without any app interaction.
-- The device does **not** push telemetry autonomously — a subscribed client must explicitly poll attribute groups to trigger a `cmd=10` response.
+- **The device streams telemetry continuously once properly triggered.** The real cloud broker sends an immediate three-part notification sequence when a client subscribes, which starts the telemetry stream. The client must then sustain it with periodic `is_online` (every 5s) and `attr 84` keepalive (every 10s) messages. See [WiFi Streaming Protocol](#wifi-streaming-protocol) below.
 - While cloud-connected, the device sends a `cmd=ping` / `cmd=pong` heartbeat approximately every 90 seconds.
-- The BLE channel is fully independent and does not require cloud connectivity — it is the **recommended approach** for a permanent Home Assistant integration.
+- The BLE and WiFi channels use **identical attribute numbers** and the same attr 84 keepalive concept — BLE sends a binary `KEEPALIVE_PKT` every 10s, WiFi sends `cmd=3` with `{"84":1}` every 10s.
 
 ---
 
@@ -191,7 +192,7 @@ Each entry in the `bind` array contains the `device_key` needed for BLE init. Th
 
 This is a custom text-based pub/sub protocol over raw TCP — not MQTT, but conceptually similar. All messages are `key=value&key=value` pairs terminated with `\r\n`.
 
-> **Critical limitation:** The device only connects to this cloud broker while a phone is actively BLE-paired to it via the Cleanergy app. With no BLE connection, the device drops its cloud session and all publish requests return `num=0` (no subscribers). This makes the WiFi/cloud path unreliable for unattended automation.
+> **Note:** The device maintains its own persistent connection to this broker (see [Device Firmware Boot Sequence](#device-firmware-boot-sequence-sibo--wp-cndoitingcom)). A client must subscribe to the device's topic and send an activation sequence to start the telemetry stream — see [WiFi Streaming Protocol](#wifi-streaming-protocol).
 
 ---
 
@@ -323,22 +324,25 @@ The full sequence to establish a working telemetry session on TCP 8896:
 1. TCP connect → 47.252.10.9:8896
 
 2. TX: cmd=auth&token=<auth_token>\r\n
-   RX: (acknowledged silently or with res=1)
+   RX: (acknowledged silently — no explicit response)
 
 3. TX: cmd=subscribe&topic=device_<device_id>&from=control&device_id=<device_id>&device_key=<device_key>\r\n
    RX: cmd=subscribe&topic=device_<device_id>&res=1\r\n
 
-4. Poll attr groups (see below) →
+4. TX: cmd=is_online&device_id=<device_id>\r\n
+   RX: cmd=is_online&res=1&online=1\r\n
+   (The real broker also forwards this as cmd=is_online to the device,
+    which triggers it to begin streaming telemetry.)
+
+5. Periodic heartbeats (must be sent continuously to sustain the stream):
+   - Every 5s:  TX: cmd=is_online&device_id=<device_id>\r\n
+   - Every 10s: TX: cmd=publish&...&message={"cmd":3,"msg":{"attr":[84],"data":{"84":1}},...}\r\n
+   - Every 60s: TX: cmd=keep\r\n
+                RX: cmd=keep&timestamp=<unix_s>&res=1\r\n
+
+6. Device streams telemetry autonomously:
    RX: cmd=publish&device_id=...&topic=device_<device_id>&message={...cmd=10 telemetry...}\r\n
-   NOTE: If device is not cloud-connected, response will be cmd=publish&res=1&num=0 (no data)
-
-5. Client keepalive (send periodically to keep broker connection alive):
-   TX: cmd=keep\r\n
-   RX: cmd=keep&timestamp=<unix_ms>&res=1\r\n
-
-6. Check if device is reachable on broker:
-   TX: cmd=is_online&device_id=<device_id>\r\n
-   RX: cmd=keep&timestamp=<unix_ms>&res=1\r\n
+   (continuous — new data arrives every few seconds while heartbeats are active)
 ```
 
 The device sends its own independent heartbeat to the broker while cloud-connected:
@@ -347,6 +351,70 @@ TX (device): cmd=ping\r\n
 RX (server): cmd=pong&res=1\r\n
 ```
 approximately every 90 seconds.
+
+---
+
+### WiFi Streaming Protocol
+
+> **Confirmed working:** This protocol was reverse-engineered by comparing PCAP captures of the real Cleanergy app ↔ cloud broker (PCAPdroid) against local proxy captures. The HA integration (`oupes_mega_wifi_proxy` + `oupes_mega_wifi_client`) implements this protocol and produces live telemetry.
+
+The device does not push telemetry just because a client subscribes — the broker must send a specific activation sequence to the device, and the client must send periodic heartbeats to sustain the stream. This mirrors the BLE protocol, where a keepalive packet (`attr 84 = 1`) must be sent every 10 seconds.
+
+#### Activation: Three-Part Immediate Notification
+
+When a client subscribes to `device_<id>` and the device is already connected (subscribed to `control_<id>`), the real cloud broker **immediately** sends three messages to the device:
+
+```
+1. cmd=is_online&device_id=<device_id>\r\n
+   → Tells the device a client is watching. The device echoes this back.
+
+2. cmd=publish&topic=control_<device_id>&message={"cmd":3,"pv":0,"sn":"<ts>","msg":{"attr":[84],"data":{"84":1}}}\r\n
+   → Attr 84 streaming trigger (identical semantics to BLE KEEPALIVE_PKT).
+     The device ACKs with cmd=10 containing {"84":1}.
+
+3. cmd=publish&topic=control_<device_id>&message={"cmd":2,"pv":0,"sn":"<ts>","msg":{"attr":[1]}}\r\n
+   → Initial attribute query. The device responds with a cmd=10 burst
+     containing the current values of the requested attributes.
+```
+
+After this sequence, the device begins **continuous telemetry streaming** — it pushes `cmd=10` data every few seconds without further prompting.
+
+> **Key discovery:** Without this immediate notification sequence, the device never starts streaming, even if a client sends poll requests. The three-part trigger at subscribe time is what starts the data flow.
+
+#### Sustaining the Stream: Three Heartbeats
+
+Once streaming is active, the client must send three periodic heartbeats to keep data flowing:
+
+| Heartbeat | Interval | Command | Purpose |
+|-----------|----------|---------|---------|
+| `is_online` | Every 5s | `cmd=is_online&device_id=<id>` | Tells broker/device a client is still watching. Without this, the device stops streaming after ~30s. |
+| Attr 84 keepalive | Every 10s | `cmd=publish` with `{"cmd":3,"msg":{"attr":[84],"data":{"84":1}}}` | WiFi equivalent of BLE `KEEPALIVE_PKT`. Sustains the telemetry stream. |
+| Session keep | Every 60s | `cmd=keep` | TCP session liveness ping. Broker replies with `cmd=keep&timestamp=<unix_s>&res=1`. |
+
+If any heartbeat stops for more than ~30 seconds, the device stops streaming and must be re-triggered with the activation sequence.
+
+#### Forwarded Message Format
+
+When the real broker forwards a `cmd=publish` from one session to another (e.g. device telemetry to app client), it **strips the `device_key`** field. This was confirmed by comparing device-side and app-side PCAPs:
+
+```
+Device sends:   cmd=publish&device_id=X&device_key=Y&topic=device_X&message={...}
+Client receives: cmd=publish&device_id=X&topic=device_X&message={...}
+                 (no device_key)
+```
+
+The `device_key` field is only present in messages originating from the sender's own session. Forwarded copies omit it. The local proxy must match this behavior.
+
+#### JSON Format
+
+The device firmware parses JSON strictly. Payloads must use **compact JSON** with no spaces after separators:
+
+```
+✅ {"cmd":3,"pv":0,"sn":"1234567890","msg":{"attr":[84],"data":{"84":1}}}
+❌ {"cmd": 3, "pv": 0, "sn": "1234567890", "msg": {"attr": [84], "data": {"84": 1}}}
+```
+
+Use `json.dumps(..., separators=(",", ":"))` in Python.
 
 ---
 
@@ -420,49 +488,60 @@ Where `<json>` is:
 ```python
 import socket, time, json
 
-HOST       = '47.252.10.9'
+HOST       = '47.252.10.9'  # or your local proxy IP
 PORT       = 8896
 DEVICE_ID  = 'YOUR_DEVICE_ID'
 DEVICE_KEY = 'YOUR_DEVICE_KEY'
 TOKEN      = 'YOUR_BROKER_AUTH_TOKEN'
 
-ATTR_GROUPS = [
-    [1, 2, 3, 4, 5, 6, 7, 8, 9],
-    [21, 22, 23, 30, 32],
-    [51],
-    [101, 53, 54, 78, 79, 80],
-]
-
 def send(s, msg):
     s.send((msg + '\r\n').encode())
 
-def connect():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((HOST, PORT))
-    s.settimeout(15)
+def make_json(cmd, attrs, data=None):
+    payload = {
+        "msg": {"attr": attrs},
+        "pv": 0,
+        "cmd": cmd,
+        "sn": str(int(time.time() * 1000))
+    }
+    if data:
+        payload["msg"]["data"] = data
+    return json.dumps(payload, separators=(",", ":"))
+
+def connect(s):
     send(s, f"cmd=auth&token={TOKEN}")
     time.sleep(0.2)
     send(s, f"cmd=subscribe&topic=device_{DEVICE_ID}&from=control"
            f"&device_id={DEVICE_ID}&device_key={DEVICE_KEY}")
     time.sleep(0.3)
-    return s
+    # Trigger streaming with is_online + attr 84 keepalive
+    send(s, f"cmd=is_online&device_id={DEVICE_ID}")
+    time.sleep(0.1)
+    msg = make_json(3, [84], {"84": 1})
+    send(s, f"cmd=publish&device_id={DEVICE_ID}"
+           f"&topic=control_{DEVICE_ID}&device_key={DEVICE_KEY}"
+           f"&message={msg}")
 
-def poll(s):
-    for attrs in ATTR_GROUPS:
-        msg = json.dumps({
-            "msg": {"attr": attrs},
-            "pv": 0,
-            "cmd": 2,
-            "sn": str(int(time.time() * 1000))
-        })
-        send(s, f"cmd=publish&device_id={DEVICE_ID}"
-               f"&topic=control_{DEVICE_ID}&device_key={DEVICE_KEY}"
-               f"&message={msg}")
-        time.sleep(0.15)
-
-def listen(s):
+def listen_and_heartbeat(s):
     buf = ""
+    last_online = last_attr84 = last_keep = time.time()
+    s.settimeout(2)  # short timeout for interleaved read + heartbeat
     while True:
+        now = time.time()
+        # Send periodic heartbeats
+        if now - last_online >= 5:
+            send(s, f"cmd=is_online&device_id={DEVICE_ID}")
+            last_online = now
+        if now - last_attr84 >= 10:
+            msg = make_json(3, [84], {"84": 1})
+            send(s, f"cmd=publish&device_id={DEVICE_ID}"
+                   f"&topic=control_{DEVICE_ID}&device_key={DEVICE_KEY}"
+                   f"&message={msg}")
+            last_attr84 = now
+        if now - last_keep >= 60:
+            send(s, "cmd=keep")
+            last_keep = now
+        # Read incoming data
         try:
             buf += s.recv(4096).decode(errors='replace')
             while '\r\n' in buf:
@@ -471,33 +550,33 @@ def listen(s):
                     try:
                         payload = json.loads(line[line.index('message=') + 8:])
                         if payload.get('cmd') == 10:
-                            return payload['msg']['data']
+                            data = payload['msg']['data']
+                            print(f"Battery: {data.get('3','?')}% | "
+                                  f"Output: {data.get('4','?')}W | "
+                                  f"Grid: {data.get('22','?')}W | "
+                                  f"Solar: {data.get('23','?')}W | "
+                                  f"Temp: {int(data.get('32', 0)) / 10:.1f}°F")
                     except Exception:
                         pass
         except socket.timeout:
-            return {}
+            pass
 
 # Main loop with auto-reconnect
 while True:
     try:
         print("Connecting...")
-        sock = connect()
-        print("Connected. Polling every 30s.")
-        while True:
-            poll(sock)
-            data = listen(sock)
-            if data:
-                print(f"Battery: {data.get('3','?')}% | "
-                      f"AC In: {data.get('5','?')}W | "
-                      f"AC Out: {data.get('4','?')}W | "
-                      f"Temp: {int(data.get('32', 0)) / 10:.1f}°C | "
-                      f"Solar: {data.get('23','?')}W")
-            time.sleep(30)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect((HOST, PORT))
+        connect(sock)
+        print("Connected. Streaming telemetry...")
+        listen_and_heartbeat(sock)
     except (ConnectionResetError, BrokenPipeError, OSError) as e:
         print(f"Disconnected ({e}), reconnecting in 10s...")
         time.sleep(10)
     except KeyboardInterrupt:
         print("Stopped.")
+        break
+```
         break
 ```
 

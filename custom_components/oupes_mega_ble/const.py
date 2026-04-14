@@ -1,9 +1,9 @@
-"""Constants for the OUPES Mega integration."""
+"""Constants for the OUPES Mega BLE integration."""
 from __future__ import annotations
 
 from datetime import timedelta
 
-DOMAIN = "oupes_mega"
+DOMAIN = "oupes_mega_ble"
 
 # Config entry data keys
 CONF_ADDRESS = "address"

@@ -1,0 +1,118 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add OUPES User Account",
+        "description": "Create a local user account. The proxy servers will be started using the configured ports.",
+        "data": {
+          "mail": "Email",
+          "passwd": "Password",
+          "port": "TCP Broker Port",
+          "http_port": "HTTP Intercept Port",
+          "sibo_port": "SiBo HTTPS Stub Port"
+        },
+        "data_description": {
+          "mail": "Email address used as the account username.",
+          "passwd": "Password for this local account.",
+          "port": "Port for device TCP broker connections (default 8896). Your NAT rules should redirect 47.252.10.9:8896 and 47.251.14.8:9504 to this port.",
+          "http_port": "Port for the HTTP REST API and firmware bind/unbind intercept server (default 8897).",
+          "sibo_port": "Port for the SiBo HTTPS stub server (default 8898)."
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "A user with this email is already configured."
+    }
+  },
+  "config_subentries": {
+    "device": {
+      "title": "Add Device",
+      "step": {
+        "user": {
+          "title": "Choose Add Method",
+          "description": "How would you like to add your OUPES unit?\n\n1. **Generate new device key**: Automatically generates a deterministic 10-digit key from your user account (matches official app behavior).\n2. **Enter existing**: Setup entirely using manual details.\n3. **Import from BLE**: (If available) Pick a cached device from your OUPES MEGA BLE integration.",
+          "data": {
+            "device_source": "Method"
+          }
+        },
+        "discover_ble": {
+          "title": "Select Nearby Bluetooth Device",
+          "description": "Found these active OUPES Mega devices nearby. Picking one will auto-fill its MAC Address and Device ID in the next step.",
+          "data": {
+            "discovered_device": "Nearby BLE Device"
+          }
+        },
+        "credentials": {
+          "title": "Register Device",
+          "description": "Register a new device to this user account.",
+          "data": {
+            "device_name": "Device Name",
+            "device_id": "Device ID",
+            "device_key": "Device Key",
+            "mac_address": "MAC Address"
+          },
+          "data_description": {
+            "device_name": "Friendly name for this device.",
+            "device_id": "The device ID (20 hex chars). Pre-filled if a BLE device was selected.",
+            "device_key": "The device key (10 hex chars). Pre-filled if a BLE device was selected.",
+            "mac_address": "The MAC address."
+            }
+          },
+          "wifi": {
+            "title": "WiFi Credentials",
+            "description": "Enter your WiFi network credentials. These will be sent to the device over Bluetooth during pairing so it can connect to your local network.",
+            "data": {
+              "wifi_ssid": "WiFi Network Name (SSID)",
+              "wifi_psk": "WiFi Password"
+            },
+            "data_description": {
+              "wifi_ssid": "The name of your 2.4 GHz WiFi network.",
+              "wifi_psk": "The password for your WiFi network."
+            }
+          },
+          "pairing": {
+            "title": "Pairing Device",
+            "description": "Please wait while Home Assistant attempts to pair to the unit over Bluetooth. Ensure the device's Bluetooth is active."
+          },
+          "pairing_complete": {
+            "title": "Pairing Complete",
+            "description": "Successfully paired with this device and set the new device key via Bluetooth!"
+          }
+        },
+        "error": {
+          "missing_mac_for_pairing": "Please enter a valid MAC address so it can be paired over Bluetooth.",
+          "pairing_device_not_found": "Could not find the device via Bluetooth. Make sure you are near the device, its Bluetooth is flashing, and the MAC address is correct.",
+          "pairing_failed": "Failed to pair with the device over Bluetooth. Try factory resetting the device's WiFi/Bluetooth settings."
+        },
+      "abort": {
+        "already_configured": "This device is already associated with an account."
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "OUPES Mega WiFi Proxy Options",
+        "data": {
+          "port": "TCP Broker Port",
+          "http_port": "HTTP Intercept Port",
+          "sibo_port": "SiBo HTTPS Stub Port",
+          "validation_mode": "Connection Validation",
+          "debug_raw_lines": "Log raw protocol lines",
+          "debug_telemetry": "Log parsed telemetry",
+          "debug_http": "Log intercepted HTTP requests"
+        },
+        "data_description": {
+          "port": "Port to listen on for device TCP broker connections.",
+          "http_port": "Port for the HTTP REST API and firmware bind/unbind intercept server.",
+          "sibo_port": "Port for the SiBo HTTPS stub server.",
+          "validation_mode": "accept_all: accept any connecting device (log-only mode). log_only: validate device_id + device_key and warn on mismatches. accept_registered: reject devices whose device_id or device_key do not match a registered user.",
+          "debug_raw_lines": "Write every raw RX and TX protocol line to oupes_mega_wifi_proxy_debug.jsonl.",
+          "debug_telemetry": "Write each parsed cmd=10 telemetry payload.",
+          "debug_http": "Write every intercepted HTTP request."
+        }
+      }
+    }
+  }
+}
+

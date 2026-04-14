@@ -115,7 +115,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         safe_addr = self.address.replace(":", "")
         config_dir = Path(self.hass.config.config_dir)
         if self._debug_attrs:
-            path = config_dir / f"oupes_mega_{safe_addr}_attrs.csv"
+            path = config_dir / f"oupes_mega_ble_{safe_addr}_attrs.csv"
             is_new = not path.exists()
             self._attr_csv_path = path
             with path.open("a", newline="", encoding="utf-8") as f:
@@ -127,7 +127,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
                     )
             _LOGGER.info("OUPES debug: attr log → %s", path)
         if self._debug_raw:
-            path = config_dir / f"oupes_mega_{safe_addr}_raw.csv"
+            path = config_dir / f"oupes_mega_ble_{safe_addr}_raw.csv"
             is_new = not path.exists()
             self._raw_csv_path = path
             with path.open("a", newline="", encoding="utf-8") as f:
@@ -299,7 +299,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         if self._continuous_task is None or self._continuous_task.done():
             self._continuous_task = self.hass.async_create_background_task(
                 self._run_continuous_connection(),
-                name=f"oupes_mega_continuous_{self.address}",
+                name=f"oupes_mega_ble_continuous_{self.address}",
             )
             _LOGGER.debug("Started continuous BLE task for %s", self.address)
 

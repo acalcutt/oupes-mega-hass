@@ -390,7 +390,7 @@ async def main(mac: str, key: str, max_cycles: int = 6,
             print(f"  SUCCESS! Device paired with key: {key}")
             print(f"{'='*60}")
             print(f"\n  Use in Home Assistant:")
-            print(f"    oupes_mega:")
+            print(f"    oupes_mega_ble:")
             print(f"      mac: \"{mac}\"")
             print(f"      device_key: \"{key}\"")
             return True
