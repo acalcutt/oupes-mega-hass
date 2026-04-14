@@ -250,7 +250,7 @@ The device firmware (DoHome ESP32, `User-Agent: DoHome-HTTP-Client/2.1`) perform
   "additional_detail": {
     "net_mac": "8cd0b2a8e142",
     "bt_mac": "8cd0b2a8e144",
-    "ap": "EIHOME_GUEST_2-4GHz"
+    "ap": "MyWiFi_2.4GHz"
   }
 }
 ```

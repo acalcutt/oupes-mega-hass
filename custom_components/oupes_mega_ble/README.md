@@ -363,7 +363,7 @@ the device key.
 
 ```powershell
 # Pair + provision WiFi in one step
-python debug_info/pair_device.py <MAC> --key <key> --ssid "EIHOME_GUEST_2-4GHz" --psk "sansui4000"
+python debug_info/pair_device.py <MAC> --key <key> --ssid "MyWiFi_2.4GHz" --psk "MyPassword"
 
 # Specify a different server region (default: wp-cn)
 python debug_info/pair_device.py <MAC> --key <key> --ssid "MyWiFi" --psk "pass123" --region wp-cn

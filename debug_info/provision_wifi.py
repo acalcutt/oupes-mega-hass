@@ -12,7 +12,7 @@ Reverse-engineered from Cleanergy app btsnoop captures (2026-04-12):
   connecting to the specified WiFi network.
 
 Usage:
-  python provision_wifi.py 8C:D0:B2:A8:E1:44 --key e98ff526ad --ssid "EIHOME_GUEST_2-4GHz" --psk "sansui4000"
+  python provision_wifi.py 8C:D0:B2:A8:E1:44 --key e98ff526ad --ssid "MyWiFi_2.4GHz" --psk "MyPassword"
   python provision_wifi.py 8C:D0:B2:A8:E1:44 --key e98ff526ad --ssid MyWiFi --psk pass123 --region wp-cn
 """
 
