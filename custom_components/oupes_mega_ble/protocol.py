@@ -1,23 +1,23 @@
-"""BLE protocol constants and packet parser for the OUPES Mega 1.
+﻿"""BLE protocol constants and packet parser for the OUPES Mega 1.
 
 All values here were reverse-engineered from an Android HCI snoop capture
 (btsnoop_hci.log) of the official Cleanergy app.
 """
 
-# ── GATT identifiers ──────────────────────────────────────────────────────────
+# â”€â”€ GATT identifiers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 SERVICE_UUID     = "00001910-0000-1000-8000-00805f9b34fb"
 WRITE_CHAR_UUID  = "00002b11-0000-1000-8000-00805f9b34fb"  # write-without-response
 NOTIFY_CHAR_UUID = "00002b10-0000-1000-8000-00805f9b34fb"  # notify
 
-# ── Keepalive ─────────────────────────────────────────────────────────────────
+# â”€â”€ Keepalive â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Without this the device terminates the session exactly 10 s after last tx.
 
 KEEPALIVE_PKT          = bytes.fromhex("0180030254010000000000000000000000000076")
 KEEPALIVE_FIRST_DELAY  = 6.0   # seconds after init sequence completes
 KEEPALIVE_INTERVAL     = 10.0  # seconds between subsequent keepalives
 
-# ── Initialization sequence ───────────────────────────────────────────────────
+# â”€â”€ Initialization sequence â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # The 11 packets below are sent to WRITE_CHAR_UUID immediately after
 # subscribing to notifications.  Packet index 6 embeds a per-device token
 # ("bd236b1695") at bytes 4-13; replace this if connecting to a different unit.
@@ -36,7 +36,7 @@ APP_INIT_SEQUENCE = [
     bytes.fromhex("0180020101000000000000000000000000000016"),
 ]
 
-# ── Attribute maps ────────────────────────────────────────────────────────────
+# â”€â”€ Attribute maps â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Attr numbers are consistent between BLE and the WiFi/cloud protocol.
 # "bool" attrs are exposed as binary sensors; all others as regular sensors.
 
@@ -45,7 +45,7 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     2:   ("DC Output",               "bool"),
     3:   ("Battery",                 "pct"),
     4:   ("AC Output Power",         "W"),
-    5:   ("Unknown (attr 5)",       "raw"),  # ⚠️ mirrors AC output W in all conditions (incl. pure discharge); likely a second AC output measurement point
+    5:   ("Unknown (attr 5)",       "raw"),  # âš ï¸ mirrors AC output W in all conditions (incl. pure discharge); likely a second AC output measurement point
     6:   ("DC 12V Output",          "W"),   # cigarette lighter / car charger port
     7:   ("USB-C Output",            "W"),   # confirmed USB-C port output wattage
     8:   ("USB-A Output",            "W"),
@@ -54,15 +54,15 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
     22:  ("Grid Input Power",        "W"),
     23:  ("Solar Input Power",       "W"),   # confirmed: 0 with no solar, tracks app SOLAR reading exactly
     30:  ("Remaining Runtime",       "min"),   # very inaccurate with no load or variable load (e.g. 5940 = 99h when outputs off/low)
-    32:  ("Main Unit Temperature",    "F/10"),  # ÷10 = temperature in °F — confirmed always °F regardless of app unit setting
-                                                   # (btsnoop across F→C→F app switch showed smooth cooling trend, never
-                                                   # dropped to ~357 range; firmware always sends in °F)
-    51:  ("Unknown (attr 51)",       "raw"),  # constant=2 in all sessions; attr 51=2 in both confirmed-Slow (br8) AND confirmed-Fast (br9) charging modes → NOT the charging mode indicator
+    32:  ("Main Unit Temperature",    "F/10"),  # Ã·10 = temperature in Â°F â€” confirmed always Â°F regardless of app unit setting
+                                                   # (btsnoop across Fâ†’Câ†’F app switch showed smooth cooling trend, never
+                                                   # dropped to ~357 range; firmware always sends in Â°F)
+    51:  ("Unknown (attr 51)",       "raw"),  # constant=2 in all sessions; attr 51=2 in both confirmed-Slow (br8) AND confirmed-Fast (br9) charging modes â†’ NOT the charging mode indicator
     53:  ("Unknown (attr 53)",       "raw"),
     54:  ("Unknown (attr 54)",       "raw"),
     84:  ("AC Output Control",       "bool"),
     105: ("Charge Mode",               "bool"),  # 1 = Fast Charge (factory default), 0 = Slow Charge
-                                                    #   APK: DeviceSettingFragment clickFastCharge/clickSlowCharge → Cmd3 DPID 105
+                                                    #   APK: DeviceSettingFragment clickFastCharge/clickSlowCharge â†’ Cmd3 DPID 105
                                                     #   S2_V2DetailFragment queries {105} via Cmd2 at initData()
                                                     #   Pre-conditions (APK): ledSw0==0 AND acInput==0 before toggling
 }
@@ -72,34 +72,34 @@ ATTR_MAP: dict[int, tuple[str, str]] = {
 # expansion port.  Attr 51 reflects the count of connected packs;
 # attrs 78+101 are in one packet type; attrs 79+80 in a separate packet type
 # (never share a packet with 78/101):
-#   78 + 101: per-pack MULTIPLEXED data — see attr 78 note below
-#   79 + 80:  external battery SoC (direct %) + battery temperature in 0.1 °F
+#   78 + 101: per-pack MULTIPLEXED data â€” see attr 78 note below
+#   79 + 80:  external battery SoC (direct %) + battery temperature in 0.1 Â°F
 EXT_BATTERY_ATTRS: set[int] = {53, 54, 78, 79, 80}
 EXT_BATTERY_MAP: dict[int, tuple[str, str]] = {
     78: ("Remaining Runtime / Voltage", "min/mV"),
                                                   # MULTIPLEXED by value range:
-                                                  #   0–5940      = per-pack remaining runtime in minutes
-                                                  #                 (5940 = charging/idle sentinel ≈ 99 h)
-                                                  #   44000–58500 = battery pack voltage in millivolts ← CONFIRMED
+                                                  #   0â€“5940      = per-pack remaining runtime in minutes
+                                                  #                 (5940 = charging/idle sentinel â‰ˆ 99 h)
+                                                  #   44000â€“58500 = battery pack voltage in millivolts â† CONFIRMED
                                                   #                 e.g. 53025 = 53.025 V (51.2 V nominal LiFePO4,
-                                                  #                 range 44 V empty → 58.4 V full charge)
-                                                  #                 correlation: higher mV = higher SoC ✓
-                                                  #   8000–30000  = unknown; values spaced ~1690 apart,
+                                                  #                 range 44 V empty â†’ 58.4 V full charge)
+                                                  #                 correlation: higher mV = higher SoC âœ“
+                                                  #   8000â€“30000  = unknown; values spaced ~1690 apart,
                                                   #                 possibly time-to-full estimate in some unit
-    79: ("External Battery SoC",        "%"),     # direct battery % (0–100); raw value = % confirmed
-    80: ("Temperature",                 "F/10"),  # external battery temperature ×0.1 °F (e.g. 878 → 87.8 °F) — confirmed vs app display
+    79: ("External Battery SoC",        "%"),     # direct battery % (0â€“100); raw value = % confirmed
+    80: ("Temperature",                 "F/10"),  # external battery temperature Ã—0.1 Â°F (e.g. 878 â†’ 87.8 Â°F) â€” confirmed vs app display
 }
 
 # Convenience set of attrs that should become binary sensors
 BOOL_ATTRS = {attr for attr, (_, unit) in ATTR_MAP.items() if unit == "bool"}
 
-# ── Output bitmask bits (attr 1) ──────────────────────────────────────────────
+# â”€â”€ Output bitmask bits (attr 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Bit positions in the attr-1 bitmask sent by the device and written to control
 # each output independently.  Confirmed by correlating HCI write commands with
 # matching attr-1 notification values in the btsnoop captures.
-OUTPUT_AC_BIT    = 0x01   # bit 0 — AC inverter output
-OUTPUT_DC12V_BIT = 0x02   # bit 1 — DC 12 V cigarette-lighter output
-OUTPUT_USB_BIT   = 0x04   # bit 2 — USB-A / USB-C combined output
+OUTPUT_AC_BIT    = 0x01   # bit 0 â€” AC inverter output
+OUTPUT_DC12V_BIT = 0x02   # bit 1 â€” DC 12 V cigarette-lighter output
+OUTPUT_USB_BIT   = 0x04   # bit 2 â€” USB-A / USB-C combined output
 
 
 def _crc8(data: bytes) -> int:
@@ -149,7 +149,7 @@ def build_setting_command(dpid: int, value: int) -> bytes:
     This is the Cmd3 protocol used by the Cleanergy app to set standby
     timeouts, ECO mode, silent mode, etc.
 
-    Packet layout: ``01 80 03 <total_len> <dpid> <value_le…> 00… <crc8>``
+    Packet layout: ``01 80 03 <total_len> <dpid> <value_leâ€¦> 00â€¦ <crc8>``
 
     Args:
         dpid:  The device property ID (e.g. 45 for machine standby).
@@ -181,7 +181,7 @@ def build_query_command(dpids: list[int]) -> bytes:
     The device responds with TLV notification packets containing the current
     values of the requested DPIDs, using the same format as telemetry.
 
-    Packet layout: ``01 80 02 <count> <dpid1> <dpid2> ... 00… <crc8>``
+    Packet layout: ``01 80 02 <count> <dpid1> <dpid2> ... 00â€¦ <crc8>``
 
     Args:
         dpids: List of DPID numbers to query (max 15 per packet).
@@ -222,23 +222,100 @@ def build_query_commands(dpids: list[int], batch_size: int = 7) -> list[bytes]:
     return packets
 
 
-def build_init_sequence(device_key: str = "bd236b1695") -> list[bytes]:
-    """Return APP_INIT_SEQUENCE with packet 6 rebuilt for *device_key*.
+def build_init_sequence(device_key: str = "bd236b1695", ssid: str = "", psk: str = "", region: str = "wp-cn") -> list[bytes]:
+    """Return AUTH sequence (formerly APP_INIT_SEQUENCE) rebuilt for *device_key*.
 
-    Packet 6 (index 6) embeds the per-device 10-character ASCII hex token at
-    bytes 4–13.  All other packets are identical across devices.
+    When *ssid*/*psk* are provided, builds the WiFi provisioning variant:
+      pkts 0-1 : WiFi SSID (15 + 17 chars max)
+      pkt  2   : WiFi password (17 chars max)
+      pkts 6-8 : device_key + token
+      pkt  0x89: server region code
     """
-    key_bytes = device_key.encode("ascii").ljust(10, b"\x00")[:10]
-    pkt6 = bytearray(20)
-    pkt6[0:4] = b"\x01\x06\x00\x00"
-    pkt6[4:14] = key_bytes
-    pkt6[19] = _crc8(bytes(pkt6[:19]))
-    pkts = list(APP_INIT_SEQUENCE)
-    pkts[6] = bytes(pkt6)
-    return pkts
+    import secrets
+    kb = device_key.encode("ascii").ljust(10, b"\x00")[:10]
+
+    if ssid:
+        ssid_b = ssid.encode("ascii")
+        psk_b = psk.encode("ascii")
+        token = secrets.token_hex(15).encode("ascii")[:30]
+
+        def _pkt(idx: int) -> bytearray:
+            p = bytearray(20)
+            p[0] = 0x01
+            p[1] = idx
+            return p
+
+        def _fin(p: bytearray) -> bytes:
+            p[19] = _crc8(bytes(p[:19]))
+            return bytes(p)
+
+        pkts = []
+
+        # idx 0: WiFi-mode header + SSID first 15 chars
+        p0 = _pkt(0x00)
+        p0[2] = 0x01  # WiFi-mode flag
+        p0[3] = (0x99 + len(psk_b)) & 0xFF  # PSK length header
+        p0[4:4 + min(len(ssid_b), 15)] = ssid_b[:15]
+        pkts.append(_fin(p0))
+
+        # idx 1: SSID remaining chars (null-padded)
+        p1 = _pkt(0x01)
+        rem = ssid_b[15:32]
+        p1[2:2 + len(rem)] = rem
+        pkts.append(_fin(p1))
+
+        # idx 2: WiFi password (null-padded)
+        p2 = _pkt(0x02)
+        pw = psk_b[:17]
+        p2[2:2 + len(pw)] = pw
+        pkts.append(_fin(p2))
+
+        # idx 3-5: zeros
+        pkts.append(_fin(_pkt(0x03)))
+        pkts.append(_fin(_pkt(0x04)))
+        pkts.append(_fin(_pkt(0x05)))
+
+        # idx 6: credential-length header + key + token prefix
+        p6 = _pkt(0x06)
+        p6[2] = ((len(ssid_b) + len(psk_b)) * 8) & 0xFF  # credential length header
+        p6[3] = (len(ssid_b) + len(token)) & 0xFF  # SSID + token length header
+        p6[4:14] = kb
+        p6[14:19] = token[0:5]
+        pkts.append(_fin(p6))
+
+        # idx 7: token middle (17 bytes)
+        p7 = _pkt(0x07)
+        p7[2:19] = token[5:22]
+        pkts.append(_fin(p7))
+
+        # idx 8: token end (8 bytes)
+        p8 = _pkt(0x08)
+        tok_end = token[22:30]
+        p8[2:2 + len(tok_end)] = tok_end
+        pkts.append(_fin(p8))
+
+        # idx 0x89: server region (at byte offset 4, matching app layout)
+        p89 = _pkt(0x89)
+        rb = region.encode("ascii")[:15]
+        p89[4:4 + len(rb)] = rb
+        pkts.append(_fin(p89))
+
+        # Final: cmd=2 query attr 1 (matches Cleanergy app terminator)
+        pkts.append(bytes.fromhex("0180020101000000000000000000000000000016"))
+        return pkts
+
+    else:
+        # Standard fallback (no wifi config)
+        pkt6 = bytearray(20)
+        pkt6[0:4] = b"\x01\x06\x00\x00"
+        pkt6[4:14] = kb
+        pkt6[19] = _crc8(bytes(pkt6[:19]))
+        pkts = list(APP_INIT_SEQUENCE)
+        pkts[6] = bytes(pkt6)
+        return pkts
 
 
-# ── Packet parser ─────────────────────────────────────────────────────────────
+# â”€â”€ Packet parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def parse_ble_packet(data: bytearray) -> dict[int, int]:
     """Parse a BLE notification packet into {attr: raw_value}.
@@ -248,10 +325,10 @@ def parse_ble_packet(data: bytearray) -> dict[int, int]:
 
     Two TLV formats appear on the wire:
 
-    * **Standard (Cmd1 telemetry):** ``[0x0A][length][attr][value…]``
+    * **Standard (Cmd1 telemetry):** ``[0x0A][length][attr][valueâ€¦]``
       Each entry is prefixed by a 0x0A tag byte.
 
-    * **Compact (Cmd2/Cmd3 settings responses):** ``[length][attr][value…]``
+    * **Compact (Cmd2/Cmd3 settings responses):** ``[length][attr][valueâ€¦]``
       No 0x0A tag.  After the cmd-echo byte (0x02 or 0x03 at data[2]),
       entries are packed back-to-back with a 0x00 length terminator.
       Confirmed by ``BleCmdResultBuildParser.getCmd2_3_10Result`` in the APK.
@@ -277,7 +354,7 @@ def parse_ble_packet(data: bytearray) -> dict[int, int]:
 
     while i < len(data) - 1:  # last byte is checksum
         if data[i] == 0x0A and i + 2 < len(data):
-            # Standard form: [0x0A][length][attr][val…]
+            # Standard form: [0x0A][length][attr][valâ€¦]
             length = data[i + 1]
             if length >= 1 and i + 2 + length <= len(data) - 1:
                 attr = data[i + 2]
@@ -285,7 +362,7 @@ def parse_ble_packet(data: bytearray) -> dict[int, int]:
                 results[attr] = int.from_bytes(val_bytes, "little") if val_bytes else 0
             i += 2 + length
         elif (is_settings_response or pkt_index > 0) and 1 <= data[i] <= 8 and i + 1 + data[i] <= len(data) - 1:
-            # Compact form: [length][attr][val…]  — no 0x0A tag.
+            # Compact form: [length][attr][valâ€¦]  â€” no 0x0A tag.
             # Used in Cmd2/Cmd3 settings responses (confirmed by APK) and
             # continuation packets where the firmware omits the tag byte.
             length = data[i]
@@ -305,10 +382,10 @@ def parse_packet_sequence(packets: list[bytearray]) -> dict[int, int]:
     """Reassemble a multi-packet BLE sequence and parse TLVs.
 
     Each 20-byte BLE notification has:
-      byte 0  – fixed header (0x01)
-      byte 1  – pkgSn (low 7 bits = index, bit 7 = last flag)
-      bytes 2–18 – payload (TLV data)
-      byte 19 – checksum
+      byte 0  â€“ fixed header (0x01)
+      byte 1  â€“ pkgSn (low 7 bits = index, bit 7 = last flag)
+      bytes 2â€“18 â€“ payload (TLV data)
+      byte 19 â€“ checksum
 
     When a TLV spans the boundary between two packets, parsing each one
     independently truncates it.  This function concatenates the payloads
@@ -361,3 +438,4 @@ def parse_packet_sequence(packets: list[bytearray]) -> dict[int, int]:
             j += 1
 
     return results
+

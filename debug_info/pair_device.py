@@ -18,9 +18,18 @@ The CLAIM includes the device_key + a 30-char random binding token spanning
 packets 6-8.  The Cleanergy app generates this via generateRandomString(30)
 using [A-Za-z0-9].  For BLE-only (no cloud), we use a fixed dummy token.
 
+When WiFi provisioning is requested (--ssid / --psk), the AUTH (0x01)
+packets carry WiFi credentials and a binding token:
+  - Packets 0-1: WiFi SSID (split across two packets, max 32 chars)
+  - Packet 2: WiFi password (max 17 chars)
+  - Packets 6-8: device_key + 30-char binding token
+  - Packet 0x89: server region code (default: wp-cn)
+
 Usage:
   1. Hold IoT button 5 seconds (rapid flash = factory reset)
   2. python pair_device.py 8C:D0:B2:A8:E1:44 --key 4c282b63af
+  3. With WiFi provisioning:
+     python pair_device.py 8C:D0:B2:A8:E1:44 --key e98ff526ad --ssid MyWiFi --psk MyPassword
 """
 
 import asyncio
@@ -29,6 +38,8 @@ import struct
 import sys
 import time
 import hashlib
+import random
+import string
 
 from bleak import BleakClient, BleakScanner
 
@@ -41,6 +52,12 @@ KEEPALIVE = bytes.fromhex("0180030254010000000000000000000000000076")
 # alphanumeric string via generateRandomString(30) for cloud binding.
 # For BLE-only (no cloud), the device accepts any 30-byte string.
 DUMMY_TOKEN = b"HALOCAL000000000000000000000000"[:30]
+
+
+def _random_token(length: int = 30) -> bytes:
+    """Random alphanumeric token matching the app's generateRandomString()."""
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choice(chars) for _ in range(length)).encode('ascii')
 
 
 def _crc8(data: bytes) -> int:
@@ -65,9 +82,79 @@ def _ts_pkt(prefix: int) -> bytes:
     return bytes(p)
 
 
-def build_auth(key: str) -> list[bytes]:
-    """Standard 0x01 AUTH sequence (11 packets)."""
+def build_auth(key: str, ssid: str = "", psk: str = "",
+               region: str = "wp-cn") -> list[bytes]:
+    """0x01 AUTH sequence (11 packets).
+
+    When *ssid*/*psk* are provided, builds the WiFi provisioning variant
+    (packet layout deduced from Cleanergy app btsnoop captures, 2026-04-12):
+      pkts 0-1 : WiFi SSID (15 + 17 chars max)
+      pkt  2   : WiFi password (17 chars max)
+      pkts 6-8 : device_key + 30-char binding token
+      pkt  0x89: server region code
+    """
     kb = key.encode("ascii").ljust(10, b"\x00")[:10]
+
+    if ssid:
+        ssid_b = ssid.encode("ascii")
+        psk_b = psk.encode("ascii")
+        token = _random_token(30)
+
+        def _pkt(idx: int) -> bytearray:
+            p = bytearray(20)
+            p[0] = 0x01
+            p[1] = idx
+            return p
+
+        def _fin(p: bytearray) -> bytes:
+            p[19] = _crc8(bytes(p[:19]))
+            return bytes(p)
+
+        # idx 0: WiFi-mode header + SSID first 15 chars
+        p0 = _pkt(0x00)
+        p0[2] = 0x01
+        p0[3] = (0x99 + len(psk_b)) & 0xFF
+        p0[4:4 + min(len(ssid_b), 15)] = ssid_b[:15]
+
+        # idx 1: SSID remaining chars (null-padded)
+        p1 = _pkt(0x01)
+        rem = ssid_b[15:32]
+        p1[2:2 + len(rem)] = rem
+
+        # idx 2: WiFi password (null-padded)
+        p2 = _pkt(0x02)
+        pw = psk_b[:17]
+        p2[2:2 + len(pw)] = pw
+
+        # idx 3-5: zeros
+        p3, p4, p5 = _pkt(0x03), _pkt(0x04), _pkt(0x05)
+
+        # idx 6: credential-length header + key + token prefix
+        p6 = _pkt(0x06)
+        p6[2] = ((len(ssid_b) + len(psk_b)) * 8) & 0xFF
+        p6[3] = (len(ssid_b) + len(token)) & 0xFF
+        p6[4:14] = kb
+        p6[14:19] = token[0:5]
+
+        # idx 7: token middle (17 bytes)
+        p7 = _pkt(0x07)
+        p7[2:19] = token[5:22]
+
+        # idx 8: token end (8 bytes)
+        p8 = _pkt(0x08)
+        tok_end = token[22:30]
+        p8[2:2 + len(tok_end)] = tok_end
+
+        # idx 0x89: server region
+        p89 = _pkt(0x89)
+        rb = region.encode("ascii")[:15]
+        p89[4:4 + len(rb)] = rb
+
+        return [_fin(p) for p in [p0, p1, p2, p3, p4, p5, p6, p7, p8, p89]] + [
+            bytes.fromhex("0180020101000000000000000000000000000016"),
+        ]
+
+    # BLE-only auth (no WiFi)
     p6 = bytearray(20)
     p6[0], p6[1] = 0x01, 0x06
     p6[4:14] = kb
@@ -130,7 +217,9 @@ async def scan(mac: str, timeout: float = 15.0):
     return dev
 
 
-async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
+async def pairing_cycle(mac: str, key: str, attempt: int,
+                       ssid: str = "", psk: str = "",
+                       region: str = "wp-cn") -> bool:
     """One full pairing cycle matching the app's btsnoop flow.
     Returns True if device transitioned to configured (status=0x00)."""
 
@@ -187,7 +276,7 @@ async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
             await asyncio.sleep(2.0)  # CCCD settle
 
             # ── Step 1: 0x01 AUTH ──
-            auth_seq = build_auth(key)
+            auth_seq = build_auth(key, ssid=ssid, psk=psk, region=region)
             print(f"\n  >> 0x01 AUTH ({len(auth_seq)} packets)...")
             for pkt in auth_seq:
                 await client.write_gatt_char(WRITE_CHAR, pkt, response=False)
@@ -277,12 +366,16 @@ async def pairing_cycle(mac: str, key: str, attempt: int) -> bool:
     return False
 
 
-async def main(mac: str, key: str, max_cycles: int = 6):
+async def main(mac: str, key: str, max_cycles: int = 6,
+               ssid: str = "", psk: str = "", region: str = "wp-cn"):
     print("=" * 60)
     print("OUPES Mega — BLE Pairing (btsnoop-matched flow)")
     print("=" * 60)
     print(f"  MAC : {mac}")
     print(f"  Key : {key}")
+    if ssid:
+        print(f"  WiFi: {ssid} (password provided)")
+        print(f"  Region: {region}")
     print()
     print("Make sure device is in pairing mode (5s button hold).")
     print("This may take 2-3 minutes with multiple reconnects,")
@@ -291,13 +384,13 @@ async def main(mac: str, key: str, max_cycles: int = 6):
     input("Press Enter when ready...")
 
     for cycle in range(1, max_cycles + 1):
-        success = await pairing_cycle(mac, key, cycle)
+        success = await pairing_cycle(mac, key, cycle, ssid=ssid, psk=psk, region=region)
         if success:
             print(f"\n{'='*60}")
             print(f"  SUCCESS! Device paired with key: {key}")
             print(f"{'='*60}")
             print(f"\n  Use in Home Assistant:")
-            print(f"    oupes_mega:")
+            print(f"    oupes_mega_ble:")
             print(f"      mac: \"{mac}\"")
             print(f"      device_key: \"{key}\"")
             return True
@@ -324,12 +417,32 @@ if __name__ == "__main__":
                         help="10-char hex key to set (e.g. 4c282b63af)")
     parser.add_argument("--cycles", type=int, default=6,
                         help="Max pairing cycles (default: 6)")
+    parser.add_argument("--ssid",
+                        help="WiFi SSID to provision (max 32 chars)")
+    parser.add_argument("--psk",
+                        help="WiFi password to provision (max 17 chars)")
+    parser.add_argument("--region", default="wp-cn",
+                        help="Server region code (default: wp-cn)")
     args = parser.parse_args()
+
+    # Validate WiFi args
+    if (args.ssid is None) != (args.psk is None):
+        print("ERROR: --ssid and --psk must be used together")
+        sys.exit(1)
+    if args.ssid is not None:
+        if len(args.ssid) > 32:
+            print(f"ERROR: --ssid max 32 chars, got {len(args.ssid)}")
+            sys.exit(1)
+        if len(args.psk) > 17:
+            print(f"ERROR: --psk max 17 chars, got {len(args.psk)}")
+            sys.exit(1)
 
     k = args.key.lower()
     if len(k) != 10 or not all(c in "0123456789abcdef" for c in k):
         print(f"ERROR: --key must be 10 hex chars, got: {args.key!r}")
         sys.exit(1)
 
-    result = asyncio.run(main(args.mac, k, args.cycles))
+    result = asyncio.run(main(args.mac, k, args.cycles,
+                              ssid=args.ssid or "", psk=args.psk or "",
+                              region=args.region))
     sys.exit(0 if result else 1)

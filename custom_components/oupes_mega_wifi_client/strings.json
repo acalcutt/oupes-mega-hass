@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to OUPES WiFi Proxy",
+        "description": "Enter the address of your OUPES WiFi proxy server and your credentials.",
+        "data": {
+          "host": "Proxy host",
+          "tcp_port": "TCP broker port",
+          "http_port": "HTTP API port",
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "select_device": {
+        "title": "Select Device",
+        "description": "Choose which device to monitor.",
+        "data": {
+          "device": "Device"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the proxy server. Check host and port.",
+      "invalid_auth": "Authentication failed. Check email and password.",
+      "unknown": "An unexpected error occurred.",
+      "no_devices": "No devices found on this account."
+    },
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "device_not_found": "Selected device was not found."
+    }
+  }
+}

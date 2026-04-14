@@ -1,12 +1,12 @@
-"""BLE pairing for OUPES Mega — programs a new device_key over Bluetooth.
+﻿"""BLE pairing for OUPES Mega â€” programs a new device_key over Bluetooth.
 
 Replicates the exact Cleanergy app pairing protocol (reverse-engineered from
 a bugreport btsnoop HCI capture):
 
-  AUTH (11 pkts) → 0x03 handshake polling → re-AUTH → more polling →
-  CLAIM data (10 pkts with key + dummy MQTT token) → wait for confirmation
+  AUTH (11 pkts) â†’ 0x03 handshake polling â†’ re-AUTH â†’ more polling â†’
+  CLAIM data (10 pkts with key + dummy MQTT token) â†’ wait for confirmation
 
-The device must be in pairing mode (5 s IoT button hold → rapid flash).
+The device must be in pairing mode (5 s IoT button hold â†’ rapid flash).
 """
 from __future__ import annotations
 
@@ -89,6 +89,9 @@ async def async_pair_device(
     device_key: str,
     max_cycles: int = 4,
     progress_callback=None,
+    ssid: str = "",
+    psk: str = "",
+    region: str = "wp-cn",
 ) -> PairingResult:
     """Run the full BLE pairing flow for an OUPES Mega device.
 
@@ -114,7 +117,7 @@ async def async_pair_device(
     for cycle in range(1, max_cycles + 1):
         await _report(f"Cycle {cycle}/{max_cycles}: looking for device...")
 
-        # Use HA's Bluetooth stack to find the device — this respects
+        # Use HA's Bluetooth stack to find the device â€” this respects
         # adapter selection and avoids raw BleakScanner issues.
         ble_device = async_ble_device_from_address(
             hass, address, connectable=True
@@ -136,18 +139,32 @@ async def async_pair_device(
 
         await _report(f"Cycle {cycle}/{max_cycles}: connecting...")
 
-        result = await _pairing_cycle(ble_device, device_key, _report)
+        result = await _pairing_cycle(
+            ble_device,
+            device_key,
+            _report,
+            ssid=ssid,
+            psk=psk,
+            region=region,
+        )
         if result == PairingResult.SUCCESS:
             return result
 
         if cycle < max_cycles:
-            await _report(f"Cycle {cycle} did not confirm — retrying...")
+            await _report(f"Cycle {cycle} did not confirm â€” retrying...")
             await asyncio.sleep(3)
 
     return PairingResult.TIMEOUT
 
 
-async def _pairing_cycle(dev, key: str, report) -> PairingResult:
+async def _pairing_cycle(
+    dev,
+    key: str,
+    report,
+    ssid: str = "",
+    psk: str = "",
+    region: str = "wp-cn",
+) -> PairingResult:
     """Execute one full pairing cycle on a single BLE connection."""
 
     claim_accepted = False
@@ -182,7 +199,12 @@ async def _pairing_cycle(dev, key: str, report) -> PairingResult:
         await asyncio.sleep(1.5)
 
         # Step 1: AUTH
-        auth_seq = build_init_sequence(key)
+        auth_seq = build_init_sequence(
+            key,
+            ssid=ssid,
+            psk=psk,
+            region=region,
+        )
         for pkt in auth_seq:
             await client.write_gatt_char(WRITE_CHAR_UUID, pkt, response=False)
             await asyncio.sleep(0.08)
@@ -266,3 +288,4 @@ async def _pairing_cycle(dev, key: str, report) -> PairingResult:
     if claim_accepted or auth_configured or got_telemetry:
         return PairingResult.SUCCESS
     return PairingResult.TIMEOUT
+
