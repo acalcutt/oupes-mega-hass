@@ -8,7 +8,7 @@ local, no cloud dependency required. Supports both **Bluetooth (BLE)** and
 
 ## Integrations
 
-This repo contains three custom components that can be installed independently
+This repo contains two custom components that can be installed independently
 depending on your setup:
 
 ### 1. BLE Integration (`oupes_mega_ble`)
@@ -23,29 +23,20 @@ device over BLE and exposes sensors, switches, and settings entities.
 
 **[Full documentation →](custom_components/oupes_mega_ble/README.md)**
 
-### 2. WiFi Proxy (`oupes_mega_wifi_proxy`)
+### 2. WiFi (`oupes_mega_wifi`)
 
-**Local cloud replacement** — intercepts the device's outbound connection to the
-OUPES cloud broker and serves it locally. Required for WiFi-based telemetry.
+**Merged WiFi integration** — intercepts the device's outbound connection to the
+OUPES cloud broker, serves it locally, and exposes WiFi telemetry as HA entities.
 
 - TCP broker proxy (port 8896) — device connects here instead of the cloud
 - HTTP API emulator (port 8897) — handles Cleanergy app REST calls
 - SiBo HTTPS stub (port 8898) — prevents app "token error" login loops
-- Requires firewall NAT rules to redirect device/app traffic
-
-**[Full documentation →](custom_components/oupes_mega_wifi_proxy/README.md)**
-
-### 3. WiFi Client (`oupes_mega_wifi_client`)
-
-**WiFi entity provider** — connects to the local proxy broker as a TCP client
-and exposes WiFi telemetry as HA entities. Requires the WiFi Proxy above.
-
 - Push-based telemetry (no polling) — entities update in real time
 - Same sensors as BLE (battery, power, temperature, runtime)
 - Output control via TCP commands
-- Automatic reconnection
+- Requires firewall NAT rules to redirect device/app traffic
 
-**[Full documentation →](custom_components/oupes_mega_wifi_client/README.md)**
+**[Full documentation →](custom_components/oupes_mega_wifi/README.md)**
 
 ---
 
@@ -54,8 +45,8 @@ and exposes WiFi telemetry as HA entities. Requires the WiFi Proxy above.
 | Scenario | Install |
 |----------|---------|
 | Simple local-only setup, device within BLE range | `oupes_mega_ble` only |
-| Device too far for BLE, or you want WiFi telemetry | `oupes_mega_wifi_proxy` + `oupes_mega_wifi_client` |
-| Want both channels for redundancy | All three |
+| Device too far for BLE, or you want WiFi telemetry | `oupes_mega_wifi` |
+| Want both channels for redundancy | Both |
 
 **BLE is the easiest path.** It works entirely over Bluetooth with zero network
 configuration — no firewall rules, no port forwarding, no DNS tricks. Just plug
@@ -66,7 +57,7 @@ cloud broker IP (`47.252.10.9`), so you need firewall NAT rules
 to intercept the device's outbound connections and redirect them to your HA
 instance. This is more powerful (push-based, real-time data, works at any
 distance) but involves a more complex setup. See the
-[WiFi Proxy README](custom_components/oupes_mega_wifi_proxy/README.md) for the
+[WiFi README](custom_components/oupes_mega_wifi/README.md) for the
 full NAT rule table.
 
 The BLE and WiFi integrations can run simultaneously — they use independent
@@ -84,12 +75,11 @@ communication channels and create separate device/entity sets.
 
 ## Quick Start (WiFi)
 
-1. Copy both `custom_components/oupes_mega_wifi_proxy/` and
-   `custom_components/oupes_mega_wifi_client/` into your HA config directory.
+1. Copy `custom_components/oupes_mega_wifi/` into your HA config directory.
 2. Restart Home Assistant.
-3. Add the **OUPES Mega WiFi Proxy** integration first — configure ports.
+3. Add the **OUPES Mega WiFi** integration — configure ports.
 4. Set up NAT rules on your firewall/router to redirect `47.252.10.9:8896` → HA.
-5. Add the **OUPES Mega WiFi Client** integration — log in to discover devices.
+5. Log in to discover devices.
 
 ---
 
