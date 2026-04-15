@@ -52,7 +52,8 @@
             "mac_address": "MAC Address",
             "wifi_ssid": "WiFi Network Name (SSID)",
             "wifi_psk": "WiFi Password",
-            "runtime_max_minutes": "Maximum Runtime Cap"
+            "runtime_max_minutes": "Maximum Runtime Cap",
+            "model_override": "Model"
           },
           "data_description": {
             "device_name": "Friendly name for this device.",
@@ -61,7 +62,8 @@
             "mac_address": "The MAC address.",
             "wifi_ssid": "The name of your 2.4 GHz WiFi network. Required so the device can connect to the local broker.",
             "wifi_psk": "The password for your WiFi network.",
-            "runtime_max_minutes": "Upper bound for Remaining Runtime (minutes). Values above this are treated as firmware noise during charging. Default: 5940 (99 h)."
+            "runtime_max_minutes": "Upper bound for Remaining Runtime (minutes). Values above this are treated as firmware noise during charging. Default: 5940 (99 h).",
+            "model_override": "Select your device model. Use Auto-detect to let the integration identify the model from the device bind step. Override this if auto-detection is not working correctly."
           }
         },
         "prepare_pairing": {
@@ -86,7 +88,8 @@
             "mac_address": "MAC Address",
             "wifi_ssid": "New WiFi Network Name (SSID)",
             "wifi_psk": "New WiFi Password",
-            "runtime_max_minutes": "Maximum Runtime Cap"
+            "runtime_max_minutes": "Maximum Runtime Cap",
+            "model_override": "Model"
           },
           "data_description": {
             "device_name": "Friendly name for this device.",
@@ -95,7 +98,8 @@
             "mac_address": "Bluetooth MAC address. Required if changing WiFi credentials.",
             "wifi_ssid": "Optional. Enter a new 2.4 GHz WiFi network name to re-provision the device. Leave blank to skip.",
             "wifi_psk": "Optional. Password for the new WiFi network.",
-            "runtime_max_minutes": "Upper bound for Remaining Runtime (minutes). Values above this are treated as firmware noise during charging. Default: 5940 (99 h)."
+            "runtime_max_minutes": "Upper bound for Remaining Runtime (minutes). Values above this are treated as firmware noise during charging. Default: 5940 (99 h).",
+            "model_override": "Select your device model. Use Auto-detect to let the integration identify the model from the device bind step. Override this if auto-detection is not working correctly."
           }
         },
         "reconfigure_wifi": {
@@ -120,7 +124,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "OUPES Mega WiFi Options",
+        "title": "OUPES Power Station WiFi Options",
         "data": {
           "port": "TCP Broker Port",
           "http_port": "HTTP Intercept Port",

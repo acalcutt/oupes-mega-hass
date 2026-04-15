@@ -27,7 +27,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "OUPES Mega Power Station",
+        "title": "OUPES Power Station BLE",
         "description": "Enter the Bluetooth MAC address of your OUPES Mega device. The device advertises via BLE as **TT**. If a device was already found nearby it will be pre-filled below.",
         "data": {
           "address": "Bluetooth MAC Address",
@@ -38,7 +38,7 @@
         }
       },
       "bluetooth_confirm": {
-        "title": "OUPES Mega Power Station",
+        "title": "OUPES Power Station BLE",
         "description": "Found **{name}** ({address}) nearby.\n\nDevice ID: `{device_id}`\n\nClick **Submit** to continue with setup."
       },
       "choose_method": {

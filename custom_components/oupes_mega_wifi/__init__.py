@@ -38,6 +38,7 @@ from .const import (
     CONF_HTTP_PORT,
     CONF_MAC_ADDRESS,
     CONF_MAIL,
+    CONF_MODEL_OVERRIDE,
     CONF_PASSWD,
     CONF_PORT,
     CONF_PRODUCT_ID,
@@ -158,6 +159,14 @@ def _coordinator_for_subentry(
             cached = getattr(http_server, "_device_cache", {}).get(device_id, {})
             product_id = cached.get("device_product_id", "")
 
+    mac_address = subentry.data.get(CONF_MAC_ADDRESS, "")
+
+    # If the user has explicitly selected a model, use that product_id directly
+    # instead of whatever auto-detection resolved (or failed to resolve).
+    model_override = subentry.data.get(CONF_MODEL_OVERRIDE, "")
+    if model_override:
+        product_id = model_override
+
     return OUPESWiFiCoordinator(
         hass,
         host="127.0.0.1",
@@ -166,6 +175,7 @@ def _coordinator_for_subentry(
         device_key=device_key,
         device_name=device_name,
         product_id=product_id,
+        mac_address=mac_address,
         token="internal",
         runtime_max_minutes=runtime_max,
     )

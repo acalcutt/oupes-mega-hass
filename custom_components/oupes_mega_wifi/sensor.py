@@ -19,7 +19,7 @@ from homeassistant.const import (
     UnitOfTime,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -28,11 +28,16 @@ from .coordinator import OUPESWiFiCoordinator
 
 
 def _device_info(coordinator: OUPESWiFiCoordinator) -> DeviceInfo:
+    connections: set[tuple[str, str]] = set()
+    if coordinator.mac_address:
+        connections.add((CONNECTION_NETWORK_MAC, coordinator.mac_address))
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.device_id)},
+        connections=connections,
         name=coordinator.device_name,
         manufacturer="OUPES",
         model=model_name_from_product_id(coordinator.product_id),
+        serial_number=coordinator.device_id,
     )
 
 

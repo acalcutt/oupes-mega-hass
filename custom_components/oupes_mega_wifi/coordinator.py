@@ -64,6 +64,7 @@ class OUPESWiFiCoordinator(DataUpdateCoordinator[OUPESData]):
         device_key: str,
         device_name: str,
         product_id: str = "",
+        mac_address: str = "",
         token: str = "",
         runtime_max_minutes: int = ATTR78_RUNTIME_MAX,
     ) -> None:
@@ -80,6 +81,7 @@ class OUPESWiFiCoordinator(DataUpdateCoordinator[OUPESData]):
         self.device_key = device_key
         self.device_name = device_name
         self.product_id = product_id
+        self.mac_address = mac_address
         self.token = token
         self.last_successful_update: datetime | None = None
         self.stale_timeout = timedelta(minutes=5)

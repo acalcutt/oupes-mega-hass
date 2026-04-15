@@ -51,7 +51,8 @@
             "device_key": "Device Key",
             "mac_address": "MAC Address",
             "wifi_ssid": "WiFi Network Name (SSID)",
-            "wifi_psk": "WiFi Password"
+            "wifi_psk": "WiFi Password",
+            "model_override": "Model"
           },
           "data_description": {
             "device_name": "Friendly name for this device.",
@@ -59,7 +60,8 @@
             "device_key": "The device key (10 hex chars). Pre-filled if a BLE device was selected.",
             "mac_address": "The MAC address.",
             "wifi_ssid": "Optional. The name of your 2.4 GHz WiFi network. Leave blank to skip WiFi provisioning.",
-            "wifi_psk": "Optional. The password for your WiFi network."
+            "wifi_psk": "Optional. The password for your WiFi network.",
+            "model_override": "Select your device model. Use Auto-detect to let the integration identify the model from the device bind step. Override this if auto-detection is not working correctly."
           }
         },
         "prepare_pairing": {
@@ -83,7 +85,8 @@
             "device_key": "Device Key",
             "mac_address": "MAC Address",
             "wifi_ssid": "New WiFi Network Name (SSID)",
-            "wifi_psk": "New WiFi Password"
+            "wifi_psk": "New WiFi Password",
+            "model_override": "Model"
           },
           "data_description": {
             "device_name": "Friendly name for this device.",
@@ -91,7 +94,8 @@
             "device_key": "The 10 hex character device key. Copy this to use with the BLE integration or for backup.",
             "mac_address": "Bluetooth MAC address. Required if changing WiFi credentials.",
             "wifi_ssid": "Optional. Enter a new 2.4 GHz WiFi network name to re-provision the device. Leave blank to skip.",
-            "wifi_psk": "Optional. Password for the new WiFi network."
+            "wifi_psk": "Optional. Password for the new WiFi network.",
+            "model_override": "Select your device model. Use Auto-detect to let the integration identify the model from the device bind step. Override this if auto-detection is not working correctly."
           }
         }
       },
@@ -112,7 +116,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "OUPES Mega WiFi Options",
+        "title": "OUPES Power Station WiFi Options",
         "data": {
           "port": "TCP Broker Port",
           "http_port": "HTTP Intercept Port",

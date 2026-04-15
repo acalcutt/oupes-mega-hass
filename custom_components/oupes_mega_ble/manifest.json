@@ -1,6 +1,6 @@
 {
   "domain": "oupes_mega_ble",
-  "name": "OUPES Mega Power Station",
+  "name": "OUPES Power Station BLE",
   "version": "1.1.0",
   "codeowners": [],
   "config_flow": true,

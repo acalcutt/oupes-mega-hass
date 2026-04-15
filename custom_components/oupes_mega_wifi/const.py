@@ -22,6 +22,7 @@ CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_NAME = "device_name"
 CONF_MAC_ADDRESS = "mac_address"
 CONF_PRODUCT_ID = "product_id"   # populated from device bind; persisted in subentry
+CONF_MODEL_OVERRIDE = "model_override"  # "" = auto-detect from device; product_id = manual override
 
 # Validation mode (option on the main config entry)
 CONF_VALIDATION_MODE = "validation_mode"

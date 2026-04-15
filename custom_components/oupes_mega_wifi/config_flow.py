@@ -35,6 +35,7 @@ from .const import (
     CONF_MAC_ADDRESS,
     CONF_HTTP_PORT,
     CONF_MAIL,
+    CONF_MODEL_OVERRIDE,
     CONF_PASSWD,
     CONF_PORT,
     CONF_RUNTIME_MAX,
@@ -46,6 +47,7 @@ from .const import (
     DEFAULT_SIBO_PORT,
     DEFAULT_VALIDATION_MODE,
     DOMAIN,
+    MODEL_CATALOG,
     VALIDATION_ACCEPT_ALL,
     VALIDATION_ACCEPT_REGISTERED,
     VALIDATION_LOG_ONLY,
@@ -250,6 +252,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
         self._wifi_ssid: str = ""
         self._wifi_psk: str = ""
         self._runtime_max: int = ATTR78_RUNTIME_MAX
+        self._model_override: str = ""
         self._reconfigure_task: asyncio.Task | None = None
         self._reconfigure_new_data: dict[str, Any] = {}
 
@@ -418,6 +421,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
             device_key = user_input.get(CONF_DEVICE_KEY, "").strip()
 
             self._runtime_max = int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX))
+            self._model_override = user_input.get(CONF_MODEL_OVERRIDE, "")
 
             if self._source_method == _SOURCE_GENERATE:
                 if not mac_address:
@@ -440,6 +444,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         CONF_DEVICE_NAME: device_name,
                         CONF_MAC_ADDRESS: mac_address,
                         CONF_RUNTIME_MAX: self._runtime_max,
+                        CONF_MODEL_OVERRIDE: self._model_override,
                     },
                 )
 
@@ -463,6 +468,20 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                 min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
                 unit_of_measurement="minutes",
             )),
+            vol.Optional(CONF_MODEL_OVERRIDE, default=""): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        {"value": "", "label": "Auto-detect from device"},
+                        *[
+                            {"value": pid, "label": name}
+                            for pid, (name, _) in sorted(
+                                MODEL_CATALOG.items(), key=lambda x: x[1][0]
+                            )
+                        ],
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
         }
         if show_wifi:
             # WiFi credentials are required for generate mode (the device needs
@@ -575,6 +594,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                 CONF_DEVICE_NAME: self._device_name_save,
                 CONF_MAC_ADDRESS: self._pairing_address,
                 CONF_RUNTIME_MAX: self._runtime_max,
+                CONF_MODEL_OVERRIDE: self._model_override,
             },
         )
 
@@ -609,6 +629,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         CONF_DEVICE_NAME: user_input.get(CONF_DEVICE_NAME, "").strip(),
                         CONF_MAC_ADDRESS: mac,
                         CONF_RUNTIME_MAX: int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX)),
+                        CONF_MODEL_OVERRIDE: user_input.get(CONF_MODEL_OVERRIDE, ""),
                     }
                     self._wifi_ssid = new_ssid
                     self._wifi_psk = new_psk
@@ -625,6 +646,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         CONF_DEVICE_NAME: user_input.get(CONF_DEVICE_NAME, "").strip(),
                         CONF_MAC_ADDRESS: mac,
                         CONF_RUNTIME_MAX: int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX)),
+                        CONF_MODEL_OVERRIDE: user_input.get(CONF_MODEL_OVERRIDE, ""),
                     },
                     title=user_input.get(CONF_DEVICE_NAME, "").strip() or config_subentry.title,
                 )
@@ -657,6 +679,23 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
                         unit_of_measurement="minutes",
                     )),
+                    vol.Optional(
+                        CONF_MODEL_OVERRIDE,
+                        default=current.get(CONF_MODEL_OVERRIDE, ""),
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                {"value": "", "label": "Auto-detect from device"},
+                                *[
+                                    {"value": pid, "label": name}
+                                    for pid, (name, _) in sorted(
+                                        MODEL_CATALOG.items(), key=lambda x: x[1][0]
+                                    )
+                                ],
+                            ],
+                            mode=SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
                     vol.Optional("wifi_ssid", default=""): TextSelector(
                         TextSelectorConfig(autocomplete="off")
                     ),

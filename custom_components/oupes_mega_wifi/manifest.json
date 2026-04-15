@@ -1,6 +1,6 @@
 {
   "domain": "oupes_mega_wifi",
-  "name": "OUPES Mega WiFi",
+  "name": "OUPES Power Station WiFi",
   "version": "0.1.0",
   "homeassistant": "2025.3.0",
   "codeowners": [],
