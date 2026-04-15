@@ -18,10 +18,27 @@
           "http_port": "Port for the HTTP REST API and firmware bind/unbind intercept server (default 8897).",
           "sibo_port": "Port for the SiBo HTTPS stub server (default 8898)."
         }
+      },
+      "reconfigure": {
+        "title": "Account Settings",
+        "description": "Account: **{mail}**\n\nThese IDs are returned by the local API server when the Cleanergy app logs in. The **Broker User ID** is the one that matters — it is used to derive the device key (`MD5(broker_uid)[:10]`). Set it to match the `mark.uid` value from the official Cleanergy app login response.",
+        "data": {
+          "broker_uid": "Broker User ID (mark.uid)",
+          "uid": "HTTP API User ID (info.uid)"
+        },
+        "data_description": {
+          "broker_uid": "The UID placed in `mark.uid` in the login response. Used by the app for device key generation: device_key = MD5(str(broker_uid))[:10]. Set this to match the official app's `mark.uid` value (visible in a PCAP of the Cleanergy login).",
+          "uid": "The UID placed in `info.uid` in the login response. The app typically uses this for display only — it does not affect device key generation. Set to match the official app's `info.uid` if needed."
+        }
       }
     },
     "abort": {
-      "already_configured": "A user with this email is already configured."
+      "already_configured": "A user with this email is already configured.",
+      "reconfigure_successful": "Account settings updated."
+    },
+    "error": {
+      "uid_not_numeric": "User ID must be a number.",
+      "uid_already_used": "This User ID is already used by another configured account."
     }
   },
   "config_subentries": {

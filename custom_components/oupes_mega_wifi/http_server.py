@@ -132,13 +132,14 @@ class OUPESHttpInterceptServer:
         self._debug_http = debug_http
         self._tcp_server = tcp_server  # OUPESWiFiProxyServer, for live online status
         self._runner: web.AppRunner | None = None
-        # token → {email, uid, nickname, mark_token}
+        # token → {email, uid, broker_uid, nickname, mark_token}
         self._sessions: dict[str, dict] = {}
         # device_id → full device dict (populated from app's device/sync calls)
         self._device_cache: dict[str, dict] = {}
         self._next_uid = 90000
         # Stable uid per email — survives registry hot-swaps and re-logins
         self._uid_by_email: dict[str, int] = {}
+        self._broker_uid_by_email: dict[str, int] = {}
         # Optional callback: called with (device_id, product_id) on device bind.
         # Set by __init__.py to propagate product_id to the matching coordinator.
         self.on_device_bind: object | None = None
@@ -165,6 +166,9 @@ class OUPESHttpInterceptServer:
     def update_user_registry(self, registry: dict[str, dict]) -> None:
         """Hot-swap the user registry (called when sub-entries are added/removed)."""
         self._user_registry = registry
+        # Clear UID caches so any changed broker_uid / uid values take effect.
+        self._uid_by_email.clear()
+        self._broker_uid_by_email.clear()
         # Re-bind any stub sessions that were created when the registry was
         # empty (their email is "unknown_<token8>@local") to the sole registered
         # user, if there is exactly one now.  Without this, a session adopted
@@ -225,6 +229,7 @@ class OUPESHttpInterceptServer:
         stub: dict = {
             "email":      adopted_email,
             "uid":        self._uid_for(adopted_email),
+            "broker_uid": self._broker_uid_for(adopted_email),
             "nickname":   "oupes_user",
             "mark_token": secrets.token_urlsafe(22),
         }
@@ -232,7 +237,7 @@ class OUPESHttpInterceptServer:
         return stub
 
     def _uid_for(self, email: str) -> int:
-        """Return a stable uid for *email*, allocating one on first call."""
+        """Return a stable HTTP API uid for *email*, allocating one on first call."""
         uid = self._uid_by_email.get(email)
         if uid is None:
             user_data = self._user_registry.get(email) or {}
@@ -266,11 +271,31 @@ class OUPESHttpInterceptServer:
             self._uid_by_email[email] = uid
         return uid
 
+    def _broker_uid_for(self, email: str) -> int:
+        """Return the broker/mark UID for *email* (used in mark.uid and for device
+        key generation: MD5(str(broker_uid))[:10]).  Falls back to the HTTP API uid
+        if no separate broker_uid is configured."""
+        buid = self._broker_uid_by_email.get(email)
+        if buid is None:
+            user_data = self._user_registry.get(email) or {}
+            stored = user_data.get("broker_uid")
+            if stored:
+                try:
+                    buid = int(stored)
+                except (ValueError, TypeError):
+                    pass
+            if buid is None:
+                # Fall back to the HTTP API uid for backwards compatibility
+                buid = self._uid_for(email)
+            self._broker_uid_by_email[email] = buid
+        return buid
+
     def _make_session(self, email: str) -> tuple[str, dict]:
         token = secrets.token_hex(16)
         session: dict = {
             "email":      email,
             "uid":        self._uid_for(email),
+            "broker_uid": self._broker_uid_for(email),
             "nickname":   secrets.token_hex(3),
             "mark_token": secrets.token_urlsafe(22),
         }
@@ -393,7 +418,7 @@ class OUPESHttpInterceptServer:
             "tcpHost":          ha_ip,
             "tcpPort":          str(self._tcp_port),
             "token":            session["mark_token"],
-            "uid":              session["uid"],
+            "uid":              session["broker_uid"],
         }, separators=(",", ":"))
         _LOGGER.info("HTTP login: %s → session %s…", email, token[:8])
         return self._json(_ok({
@@ -443,7 +468,7 @@ class OUPESHttpInterceptServer:
             "tcpHost": self._local_ip(request),
             "tcpPort": str(self._tcp_port),
             "token":   session["mark_token"],
-            "uid":     session["uid"],
+            "uid":     session.get("broker_uid", session["uid"]),
         }, separators=(",", ":"))
         return self._json(_ok({
             "id":                   session["uid"],

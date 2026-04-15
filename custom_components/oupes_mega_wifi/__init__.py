@@ -45,6 +45,7 @@ from .const import (
     CONF_RUNTIME_MAX,
     CONF_SIBO_PORT,
     CONF_UID,
+    CONF_BROKER_UID,
     CONF_VALIDATION_MODE,
     DEFAULT_HTTP_PORT,
     DEFAULT_PORT,
@@ -97,6 +98,7 @@ def _build_user_registry(hass: HomeAssistant) -> dict[str, dict]:
             registry[email] = {
                 "passwd": entry.data.get(CONF_PASSWD, ""),
                 "uid": entry.data.get(CONF_UID),
+                "broker_uid": entry.data.get(CONF_BROKER_UID),
                 "devices": [],
             }
         for subentry in getattr(entry, "subentries", {}).values():

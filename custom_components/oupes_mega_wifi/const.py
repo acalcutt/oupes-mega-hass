@@ -16,7 +16,10 @@ DEFAULT_PORT = 8896
 # Sub-entry / user registry keys
 CONF_MAIL = "mail"
 CONF_PASSWD = "passwd"          # stored as SHA-256 hex digest
-CONF_UID = "uid"                # numeric user ID generated for the proxy
+CONF_UID = "uid"                # numeric HTTP API user ID (info.uid in login response)
+CONF_BROKER_UID = "broker_uid"  # numeric broker/mark UID (mark.uid in login response)
+                                # used by the app for device key generation:
+                                # device_key = MD5(str(broker_uid))[:10]
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_KEY = "device_key"
 CONF_DEVICE_NAME = "device_name"

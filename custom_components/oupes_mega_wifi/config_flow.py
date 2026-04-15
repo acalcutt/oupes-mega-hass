@@ -35,6 +35,7 @@ from .const import (
     CONF_MAC_ADDRESS,
     CONF_HTTP_PORT,
     CONF_MAIL,
+    CONF_BROKER_UID,
     CONF_MODEL_OVERRIDE,
     CONF_PASSWD,
     CONF_PORT,
@@ -103,13 +104,18 @@ class OUPESMegaWiFiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(mail)
             self._abort_if_unique_id_configured()
 
-            # Hash the email to create a stable 8-digit numeric UID for proxy tracking
+            # Hash the email to create stable numeric UIDs for proxy tracking.
+            # CONF_UID   = HTTP API user ID   (info.uid in login response)
+            # CONF_BROKER_UID = Broker/mark UID (mark.uid in login response, used
+            #                   for device key generation: MD5(str(uid))[:10])
+            # Both default to the same derived value; user can override via Reconfigure.
             uid_str = str(int(hashlib.md5(mail.encode()).hexdigest(), 16) % 100000000)
 
             entry_data = {
                 CONF_MAIL: mail,
                 CONF_PASSWD: passwd_hash,
                 CONF_UID: uid_str,
+                CONF_BROKER_UID: uid_str,
             }
             if not is_secondary_user:
                 entry_data.update({
@@ -154,6 +160,62 @@ class OUPESMegaWiFiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(schema),
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Allow the user to view and change the UIDs for this account."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            raw_uid = user_input.get(CONF_UID, "").strip()
+            raw_broker_uid = user_input.get(CONF_BROKER_UID, "").strip()
+
+            if not raw_uid.isdigit():
+                errors[CONF_UID] = "uid_not_numeric"
+            if not raw_broker_uid.isdigit():
+                errors[CONF_BROKER_UID] = "uid_not_numeric"
+
+            if not errors:
+                # Check uniqueness of broker_uid across other entries (it's the key
+                # that actually matters for device key generation).
+                for other in self.hass.config_entries.async_entries(DOMAIN):
+                    if other.entry_id == entry.entry_id:
+                        continue
+                    other_broker = str(
+                        other.data.get(CONF_BROKER_UID)
+                        or other.data.get(CONF_UID, "")
+                    )
+                    if other_broker == raw_broker_uid:
+                        errors[CONF_BROKER_UID] = "uid_already_used"
+                        break
+
+            if not errors:
+                return self.async_update_and_abort(
+                    entry,
+                    data={**entry.data, CONF_UID: raw_uid, CONF_BROKER_UID: raw_broker_uid},
+                )
+
+        current_uid = str(entry.data.get(CONF_UID, ""))
+        current_broker_uid = str(
+            entry.data.get(CONF_BROKER_UID) or entry.data.get(CONF_UID, "")
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_BROKER_UID, default=current_broker_uid): TextSelector(
+                        TextSelectorConfig(autocomplete="off")
+                    ),
+                    vol.Required(CONF_UID, default=current_uid): TextSelector(
+                        TextSelectorConfig(autocomplete="off")
+                    ),
+                }
+            ),
+            description_placeholders={"mail": entry.data.get(CONF_MAIL, "")},
+            errors=errors,
         )
 
 
@@ -399,14 +461,19 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
             errors["base"] = self._pairing_error
             self._pairing_error = None
 
-        # Calculate the default key based on the parent user UID hash (mirrors official app)
+        # Calculate the default key based on the broker UID (mirrors official app:
+        # createDeviceKey(userId) = MD5(str(broker_uid))[:10])
+        # Use CONF_BROKER_UID if set; fall back to CONF_UID for backwards compatibility.
         try:
             parent_entry = self.hass.config_entries.async_get_entry(self.handler[0])
-            uid_str = parent_entry.data.get(CONF_UID, "")
-            if not uid_str:
+            broker_uid_str = (
+                parent_entry.data.get(CONF_BROKER_UID, "")
+                or parent_entry.data.get(CONF_UID, "")
+            )
+            if not broker_uid_str:
                 mail = parent_entry.data.get(CONF_MAIL, "unknown")
-                uid_str = str(int(hashlib.md5(mail.encode()).hexdigest(), 16) % 100000000)
-            default_key = hashlib.md5(str(uid_str).encode()).hexdigest()[:10]
+                broker_uid_str = str(int(hashlib.md5(mail.encode()).hexdigest(), 16) % 100000000)
+            default_key = hashlib.md5(str(broker_uid_str).encode()).hexdigest()[:10]
         except (AttributeError, IndexError, TypeError):
             default_key = ""
 
