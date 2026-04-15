@@ -22,6 +22,8 @@ from .const import (
     CONF_TOKEN,
     DEFAULT_TCP_PORT,
     DOMAIN,
+    CONF_RUNTIME_MAX,
+    ATTR78_RUNTIME_MAX,
 )
 from .coordinator import OUPESWiFiClientCoordinator
 
@@ -53,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_name=device_name,
         product_id=product_id,
         token=token,
+        runtime_max_minutes=entry.options.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX),
     )
 
     # Start the persistent TCP connection

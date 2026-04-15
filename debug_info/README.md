@@ -1,11 +1,17 @@
 # OUPES Mega 1 — Reverse Engineered Telemetry API
 
-> **Status:** Research/Proof of Concept  
+> **Status:** Complete — 3 working Home Assistant integrations (`oupes_mega_ble`, `oupes_mega_wifi_proxy`, `oupes_mega_wifi_client`)  
 > **Device:** OUPES Mega 1 Power Station (WiFi+BLE model)  
 > **App:** Cleanergy (`com.cleanergy.app`)  
 > **Firmware:** 1.2.0  
 
-This document summarizes findings from reverse engineering the OUPES Mega 1's communication protocols, captured via PCAPdroid (Android), Wireshark, and pfSense firewall captures. The goal was to enable telemetry access for Home Assistant integration without relying on the official app.
+This document summarizes findings from reverse engineering the OUPES Mega 1's communication protocols, captured via PCAPdroid (Android), Wireshark, and pfSense firewall captures. These findings were used to build three Home Assistant integrations:
+
+| Integration | Transport | Capabilities |
+|---|---|---|
+| **`oupes_mega_ble`** | Bluetooth LE (local) | Full read/write: sensors, binary sensors, output switches, all device settings (silent mode, breath light, fast charge, screen timeout, standby timeouts, ECO mode) |
+| **`oupes_mega_wifi_proxy`** | TCP broker (LAN) | Infrastructure — intercepts the device's cloud connection via pfSense NAT and re-serves it locally. Provides the TCP broker that `wifi_client` connects to |
+| **`oupes_mega_wifi_client`** | TCP via proxy broker | Read + output control only: sensors, binary sensors, AC/DC/USB output switches. Device settings are **not** supported over WiFi (firmware does not echo setting DPIDs back) |
 
 ---
 
@@ -56,7 +62,7 @@ The OUPES Mega 1 communicates via two parallel channels:
 │                                                     │
 │  ┌──────────────┐        ┌───────────────────────┐  │
 │  │  BLE (GATT)  │        │  WiFi TCP port 8896   │  │
-│  │  "TT" device │        │  → 47.252.10.9        │  │
+│  │  ADV: "TT"   │        │  → wp-cn.doiting.com  │  │
 │  └──────┬───────┘        └──────────┬────────────┘  │
 │         │                           │               │
 └─────────┼───────────────────────────┼───────────────┘
@@ -188,7 +194,7 @@ Each entry in the `bind` array contains the `device_key` needed for BLE init. Th
 
 ### TCP Telemetry Channel (Port 8896)
 
-**Server:** `47.252.10.9:8896` (Alibaba Cloud)
+**Server:** `wp-cn.doiting.com:8896` (Alibaba Cloud — resolves to a regional IP such as `47.252.10.9`; use FQDN firewall aliases, not hardcoded IPs)
 
 This is a custom text-based pub/sub protocol over raw TCP — not MQTT, but conceptually similar. All messages are `key=value&key=value` pairs terminated with `\r\n`.
 
@@ -278,7 +284,7 @@ The device firmware (DoHome ESP32, `User-Agent: DoHome-HTTP-Client/2.1`) perform
 | 04:46:57 | POST /api/device/unbind |
 | 04:47:26 | POST /api/device/bind (289-byte JSON body) |
 | 04:47:29 | Bind response received (ret:"1" with tcp_ip/tcp_port) |
-| 04:47:29.383 | TCP SYN to 47.252.10.9:8896 |
+| 04:47:29.383 | TCP SYN to wp-cn.doiting.com:8896 (resolved to 47.252.10.9 at time of capture) |
 | 04:47:29.462 | cmd=subscribe sent to broker |
 | 04:47:29.486 | cmd=keep sent |
 | 04:47:29.563 | First cmd=publish (telemetry attr [0] init) |
@@ -312,7 +318,7 @@ cmd=subscribe&topic=control_<device_id>&res=1\r\n
 cmd=keep&timestamp=<unix_seconds>&res=1\r\n
 ```
 
-> **Note on `device_key`:** The device_key used by the firmware in broker messages (`bd236b1695`) may differ from the device_key returned by the app's HTTP API (`e98ff526ad`). The firmware key is the one sent in the bind request and used in all subsequent broker communication.
+> **Note on `device_key`:** The `device_key` is **account-scoped, not device-scoped**. It is derived from the user's cloud account UID via `MD5(uid)[:10]` — confirmed from `KeyUtils.java` in the Cleanergy APK (`createDeviceKey(userId) = MD5Util.encodeMD5(userId).substring(0, 10)`). All devices bound to the same Cleanergy account share the same `device_key`. Example: uid=`60859` → `MD5("60859")[:10]` = `bd236b1695`. A different value seen in earlier captures (`e98ff526ad`) was from a different user account, not a firmware-vs-API discrepancy.
 
 ---
 
@@ -321,7 +327,7 @@ cmd=keep&timestamp=<unix_seconds>&res=1\r\n
 The full sequence to establish a working telemetry session on TCP 8896:
 
 ```
-1. TCP connect → 47.252.10.9:8896
+1. TCP connect → wp-cn.doiting.com:8896  (IP resolved via DNS at connect time)
 
 2. TX: cmd=auth&token=<auth_token>\r\n
    RX: (acknowledged silently — no explicit response)
@@ -392,6 +398,8 @@ Once streaming is active, the client must send three periodic heartbeats to keep
 | Session keep | Every 60s | `cmd=keep` | TCP session liveness ping. Broker replies with `cmd=keep&timestamp=<unix_s>&res=1`. |
 
 If any heartbeat stops for more than ~30 seconds, the device stops streaming and must be re-triggered with the activation sequence.
+
+> **Mega 2 observation (2026-04-14):** In a full Mega 2 session captured via pfSense pcap, the device began streaming after `subscribe` + `cmd=is_online` alone, with attr 84 not sent until ~40 seconds later. This suggests the `is_online` notification is sufficient to trigger streaming; attr 84 at subscribe time is **recommended** (it matches the real cloud broker's activation sequence and is sent by our proxy) but not strictly required to start data flow. The attr 84 keepalive every 10 s is still required to **sustain** the stream.
 
 #### Forwarded Message Format
 
@@ -488,7 +496,7 @@ Where `<json>` is:
 ```python
 import socket, time, json
 
-HOST       = '47.252.10.9'  # or your local proxy IP
+HOST       = 'wp-cn.doiting.com'  # or your local proxy IP
 PORT       = 8896
 DEVICE_ID  = 'YOUR_DEVICE_ID'
 DEVICE_KEY = 'YOUR_DEVICE_KEY'
@@ -639,7 +647,18 @@ Bytes 23-24: Zero padding
 
 The `device_key` is required for BLE init packet 6 and for the WiFi cloud protocol. **It is NOT present in the BLE advertising data.**
 
-The `device_key` is assigned by the cloud server and stored in the app's local MMKV storage (`/data/user/0/com.cleanergy.app/files/mmkv/http_mmkv`). The internal device config JSON (confirmed from Android bugreport logcat):
+The `device_key` is **account-scoped** — derived from the user's cloud UID and shared across all devices on the same account. Confirmed from `KeyUtils.java` in the Cleanergy APK:
+
+```java
+// KeyUtils.java
+public static String createDeviceKey(String userId) {
+    return MD5Util.encodeMD5(userId).substring(0, 10);
+}
+```
+
+Example: uid=`60859` → `MD5("60859")[:10]` = `bd236b1695`. The same key was observed in both the Mega 1 and Mega 2 broker sessions for the same account.
+
+The cloud server stores this key and returns it via `/api/app/device/list`. It is also held in the app's local MMKV storage (`/data/user/0/com.cleanergy.app/files/mmkv/http_mmkv`). The internal device config JSON (confirmed from Android bugreport logcat):
 
 ```json
 {
@@ -1127,7 +1146,7 @@ Cleanergy app, a 30-char random binding token is transmitted in the CLAIM
 sequence (see [Phase 4](#phase-4--claim-10-packets-slot-0x03) above) — originally
 misidentified as WiFi SSID + PSK, but actually `generateRandomString(30)` from the APK.
 How the device obtains its WiFi credentials is unknown. The device
-connects to the Alibaba Cloud broker at `47.252.10.9:8896` and maintains a
+connects to the Alibaba Cloud broker at `wp-cn.doiting.com:8896` and maintains a
 `cmd=ping` / `cmd=pong` heartbeat. However, this cloud connection is **only active
 while a phone is BLE-paired** — it drops immediately when BLE disconnects.
 
@@ -1135,7 +1154,7 @@ while a phone is BLE-paired** — it drops immediately when BLE disconnects.
 
 | Source | Finding |
 |--------|---------|
-| Router pcap (`192.168.1.209`) | Device connects outbound to `47.252.10.9:8896` (TCP). Only `cmd=ping` / `cmd=pong` heartbeats observed — no telemetry data in the capture. |
+| Router pcap (`192.168.1.209`) | Device connects outbound to `wp-cn.doiting.com:8896` (TCP). Only `cmd=ping` / `cmd=pong` heartbeats observed — no telemetry data in the capture. |
 | btsnoop (17 bugreports) | CLAIM packets 6/7/8 carry a 30-char random alphanumeric binding token (`generateRandomString(30)`), NOT WiFi credentials as originally assumed. Same token per pairing session; different token each session. |
 | UDP broadcast (app) | App sends `{"cmd":0,"pv":0,"sn":"..."}` to `255.255.255.255:6095`. Device does **not** respond. One-way only. |
 | Cloud TCP 8896 | Requires active BLE session. Device publishes `num=0` (no subscribers) when no phone is BLE-connected. Not viable for unattended HA use. |
@@ -1163,29 +1182,51 @@ python debug_info/scan_wifi_ports.py 192.168.1.209 --ports 1-65535 --timeout 0.3
 python debug_info/scan_wifi_ports.py 192.168.1.209 --udp
 ```
 
-**Important:** The device must be WiFi-connected when you run the scan. Pair via
-the Cleanergy app first (or use `pair_device.py` with real WiFi credentials in
-the CLAIM sequence), then run the scan immediately while the BLE session is active.
+**Important:** The device must be WiFi-connected when you run the scan. Use
+the HA BLE integration's "Create New Key" config flow (which pairs and
+provisions WiFi automatically), or use `pair_device.py` / `provision_wifi.py`
+manually, then run the scan while the device is connected.
 
-### ~~Provisioning WiFi via BLE~~ — Not Possible
+### Provisioning WiFi via BLE — Working
 
-The 30-byte blob in CLAIM packets 6-8 was originally assumed to carry WiFi
-credentials (SSID + PSK). **This was incorrect.** APK source analysis revealed:
+> **Correction (2026-04-13):** The earlier analysis in this section concluded
+> that CLAIM packets carry random tokens, not WiFi credentials, and that WiFi
+> provisioning via BLE was "not possible". **This was wrong.** The 30-byte
+> field in CLAIM packets 6–8 DOES carry the WiFi SSID + PSK, padded to 30
+> bytes. The confusion arose because the APK's `generateRandomString(30)` is
+> used for a *different* code path (the `openId` binding token); the actual
+> WiFi provisioning path calls `toSendConfigNetData` which encodes real
+> credentials.
 
-1. The 30-byte blob is `generateRandomString(30)` — a random `[A-Za-z0-9]`
-   binding token (likely an `openId`), NOT WiFi credentials.
-2. The Mega 1 is classified as `SingleBleDevice` (BLE-only). The full Cmd1
-   method that takes `ssid` + `passwd` parameters exists in the APK but is
-   **dead code — never called** from any reachable path.
-3. Both `SingleBleDevice.updateDeviceData()` and `WifiBleDevice.updateDeviceData()`
-   call only `Cmd1Verify`, which sends `token` + `deviceKey` — no WiFi credentials.
-4. The device's ESP32 WiFi connection to `47.252.10.9:8896` must get its WiFi
-   credentials through some other mechanism (possibly factory-configured, or via
-   the un-decompilable `toSendConfigNetData` initial pairing flow).
+WiFi provisioning via BLE CLAIM packets is **fully working**. The HA WiFi proxy
+integration (`oupes_mega_wifi_proxy`) implements this in its device sub-entry
+flow under the "Generate new device key" option — it collects SSID/PSK and
+passes them to `async_pair_device()` during BLE pairing. The BLE integration
+(`oupes_mega_ble`) does not yet collect WiFi credentials in its config flow,
+though the underlying protocol layer supports it (a future enhancement). The
+standalone script [`provision_wifi.py`](provision_wifi.py) also demonstrates
+the protocol.
 
-The WiFi provisioning mechanism for the Mega 1, if it exists, is not in the
-BLE CLAIM protocol we reverse-engineered. The BLE-only path remains the
-recommended approach for Home Assistant integration.
+**How it works:**
+
+1. BLE connect → handshake → init sequence (as documented above)
+2. CLAIM packets 1–5: pairing handshake (device_key exchange)
+3. **CLAIM packet 6:** WiFi SSID (padded to 30 bytes)
+4. **CLAIM packet 7:** WiFi PSK (padded to 30 bytes)
+5. **CLAIM packet 8:** Confirmation / commit
+6. Device disconnects BLE, connects to WiFi, and begins the SiBo bind → broker connect sequence
+
+Five bugs were fixed in `protocol.py` to make this work:
+- CRC-8 checksum calculation was incorrect
+- Packet framing offsets were wrong
+- SSID/PSK padding was not applied
+- Slot byte was hardcoded incorrectly
+- Packet length field did not account for the full payload
+
+After successful provisioning, the device reboots its WiFi stack and connects
+to the configured network within ~5–10 seconds. No factory reset or Cleanergy
+app is required — the WiFi proxy integration handles the entire flow during
+device setup.
 
 ---
 
@@ -1469,6 +1510,8 @@ Because the firmware update protocol relies on unencrypted HTTP URLs and has no 
 - **Slot 1 mystery values (attr 78 range 6001–43999):** 6,633 readings across the float-charge period. The dominant value is 27,499 appearing in ~73% of readings; occasional excursions span the full 6,097–40,088 range. No scaling maps these to a plausible voltage. The slot 2 mystery count was only 26 (vs 6,633 for slot 1), reinforcing that the mystery range is a per-module BMS measurement asymmetrically reported across slots — likely related to float-charge balancing current or cell-level data that only one BMS controller exposes.
 - **`device_id` is embedded in BLE advertising data — confirmed from btsnoop19.** The manufacturer-specific data (AD type 0xFF) in the TT device's advertisement contains the full 20-char `device_id` at bytes 1–10 of the raw manufacturer payload, followed by the 6-byte ASCII `device_product_id` and the reversed MAC address. The first byte of the manufacturer data is a flag (observed as 0x00 or 0x01, possibly toggling pairing state). The BLE company_id (0x7501 in LE) is not a real Bluetooth SIG assignment — its high byte (`0x75`) is actually the first byte of `device_id`. **The `device_id` in ADV data could be used to query the cloud API for the `device_key`, potentially automating the setup process.**
 - **`device_key` is NOT in advertising data.** Exhaustive search of all AD structures in 691 advertising reports from the TT device confirmed that the 10-char device_key does not appear anywhere in the advertisement payload. The key is obtained from the cloud API (`api.upspowerstation.top`) using the `device_id` from the advertising data, and stored locally in the app's MMKV storage.
+- **`device_key` is account-derived, not device-unique.** Confirmed from `KeyUtils.java`: `createDeviceKey(userId) = MD5(userId)[:10]`. All devices bound to the same Cleanergy account have the same key (e.g. uid=60859 → `bd236b1695` on both Mega 1 and Mega 2). The cloud server stores and returns this value via `/api/app/device/list`. A second `createWifiBleDeviceKey(wifiDeviceKey)` variant (last 10 chars of the WiFi key) exists in the APK for WiFi-provisioned setups but is not used in normal broker sessions.
+- **BT MAC = WiFi MAC + 2.** The device's Bluetooth MAC is always WiFi MAC + 2. Confirmed on Mega 1 (WiFi `8cd0b2a8e142`, BT `8cd0b2a8e144`) and Mega 2 (WiFi `ecda3b30b9c0`, BT `ecda3b30b9c2`). The bind request's `additional_detail.bt_mac` field also confirms this arithmetic.
 - **`device_product_id` (`O44A5o`) appears in multiple contexts:** BLE service data (UUID=0xA201), BLE manufacturer data, BLE handshake response, and the cloud API JSON config. This 6-byte ASCII string is a per-product-model identifier (the same across units of the same model). It is distinct from the `device_key` (which is per-unit) and the `device_id` (which is per-unit).
 - **BLE handshake response decoded.** After the app sends the initial 0x80/0x00 handshake packet, the device responds with two notification packets containing: (1) the full `device_id` as raw bytes, and (2) the reversed MAC address + `device_product_id` in ASCII. The app uses these to confirm it connected to the expected device before proceeding with the init sequence.
 - **Cleanergy app uses two BLE slots:** The btsnoop19 capture shows the app initializing both slot 3 (first) and slot 1 (second). Slot 3 init packets carry the `device_key` plus an MQTT `client_id` string (29 chars spread across packets 6–8). Slot 1 init packets carry only the `device_key` (no MQTT data — zeros in packets 7–8). The slot 3 handshake is sent first, then slot 1. The HA integration's working init sequence uses only slot 1 — the slot 3 MQTT setup is only needed for cloud push functionality.
@@ -1538,6 +1581,7 @@ idle output or entering sleep mode.
 
 | DPID | BatteryData Field | Setting | Unit | Preset Values |
 |------|-------------------|---------|------|---------------|
+| 40 | `deviceStandByTime` (or similar) | **Device-level standby / car port timeout** (Mega 2 specific — observed written with `0` = disable and `86400` = 24 h by app immediately after subscribe) | Seconds | 0 (never), 86400 | 
 | 45 | `standby_time` | **Machine standby** (whole device sleep) | Seconds | 0 (never), 3600, 10800, 21600, 43200 |
 | 46 | `wifiStandByTime` | **WiFi standby** | Seconds | 0, 21600, 43200, 86400 |
 | 47 | `usbCarCloseTime` / `usbStandByTime` | **USB/Car port standby** | Seconds | 600, 1800, 3600, 10800, 21600 |
@@ -1593,6 +1637,8 @@ idle output or entering sleep mode.
 
 | DPID | BatteryData Field | Setting | Unit |
 |------|-------------------|---------|------|
+| 103 | `rcBatteryChargeVoltageMv` or `rcBatteryChargePower` | **Charge configuration read-back (voltage or power)** — queried by app on Mega 2 alongside DPID 104 and 105; exact field mapping unconfirmed | Raw |
+| 104 | `rcBatteryChargeCurrentMa` or `rcBatteryChargeVoltageCurrentRaw` | **Charge configuration read-back (current or composite)** — queried by app on Mega 2; exact field mapping unconfirmed | Raw |
 | 106 | `acChargingPowerMax` | **AC charger max power** | Watts |
 
 > **Note:** DPID 105 is the **Charge Mode** setting (0 = Slow charge, 1 = Fast
@@ -1631,15 +1677,19 @@ idle output or entering sleep mode.
 | 208 | `battery_output_power` | Battery output power (display only) |
 | 209 | `battery_starting_voltage` | Battery starting voltage (display only) |
 
-### What the HA Integration Currently Supports
+### What the HA Integrations Currently Support
 
-**Currently implemented:** Only the output bitmask (attr 1) is writable — AC,
-DC 12V, and USB output on/off via `build_output_command()`.
+**BLE integration (`oupes_mega_ble`) — full read/write:**
+- Output switches: AC, DC 12V, USB on/off via `build_output_command()` (attr 1 bitmask)
+- Device settings via Cmd3: silent mode (63), breath light (58), fast charge (105), screen timeout (41), standby timeouts (45–49), AC ECO (110/111/114), DC ECO (112/113/115)
+- All telemetry sensors and binary sensors
 
-**Currently implemented:** AC/DC 12V/USB output switches (attr 1 bitmask), silent
-mode (63), AC ECO (110), DC ECO (112), breath light (58), charge mode (105).
+**WiFi client integration (`oupes_mega_wifi_client`) — read + output control:**
+- Output switches: AC, DC 12V, USB on/off (via cloud broker Cmd3 with attr 84/1)
+- All telemetry sensors and binary sensors
+- **No device settings** — the device firmware does not echo setting DPIDs (41–63, 105, 110–115) back over the WiFi/cloud broker channel, so there is no way to confirm or track setting state. Settings must be changed via BLE.
 
-**Not yet implemented (candidates for new HA entities):**
+**Not yet implemented (candidates for future BLE entities):**
 
 | Priority | DPIDs | Entity Type | Rationale |
 |----------|-------|-------------|-----------|
@@ -1670,7 +1720,7 @@ used to auto-detect device capabilities and adjust available entities per model.
 | Product ID | Model | Series | Notes |
 |------------|-------|--------|-------|
 | `O44A5o` | **MEGA 1** | `mega_1` | Currently tested, confirmed working. Separate series from Mega 2/3/5 due to different bit2 port assignment (USB-only vs Anderson+USB) |
-| `YRWj81` | **MEGA 2** | Mega | Planned for testing |
+| `YRWj81` | **MEGA 2** | Mega | **Confirmed working (2026-04-14).** Identical WiFi protocol to Mega 1 — same broker `wp-cn.doiting.com:8896`, same streaming attr groups, same keepalive mechanism, same firmware version 1.2.0. Tested: device_id=`69560885ecda3b30b9c0`, BT MAC = WiFi MAC + 2. App additionally queries DPIDs [40, 41, 49, 114] and [103, 104, 105] for Mega 2 (40, 103, 104 not observed on Mega 1). |
 | `EFDayi` | **MEGA 3** | Mega | |
 | `JTEnK3` | **MEGA 5** | Mega | |
 | `Hr9Uhd` | **Exodus 1200 / S012** | Exodus | |

@@ -330,7 +330,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         # Pre-seed attrs that the firmware only sends sporadically so their
         # entities hold a stable value instead of oscillating to Unknown.
         attrs: dict[int, int] = {105: 1}  # Charge Mode default = Fast (factory default)
-        ext_batteries: dict[int, dict[int, int]] = {}
+        ext_batteries: dict[int, dict[int, int]] = {1: {}}  # pre-seed slot 1 to match current_slot default
         current_slot = 1
         disconnected_event = asyncio.Event()
 
@@ -546,7 +546,7 @@ class OUPESMegaCoordinator(DataUpdateCoordinator):
         # Pre-seed attrs that the firmware only sends sporadically so their
         # entities hold a stable value instead of oscillating to Unknown.
         attrs: dict[int, int] = {105: 1}  # Charge Mode default = Fast (factory default)
-        ext_batteries: dict[int, dict[int, int]] = {}
+        ext_batteries: dict[int, dict[int, int]] = {1: {}}  # pre-seed slot 1 to match current_slot default
         current_slot = 1
         got_data = False
         disconnected_event = asyncio.Event()

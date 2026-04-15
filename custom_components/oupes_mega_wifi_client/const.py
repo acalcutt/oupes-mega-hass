@@ -17,6 +17,10 @@ CONF_DEVICE_NAME = "device_name"
 CONF_PRODUCT_ID = "product_id"
 CONF_TOKEN = "token"
 
+# Config entry option key — user-settable upper bound (minutes) for runtime attrs
+# (attr 30 and attr 78). Values above this are filtered as firmware noise.
+# Default: ATTR78_RUNTIME_MAX.
+CONF_RUNTIME_MAX = "runtime_max_minutes"
 # Defaults — match the proxy's default ports
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_TCP_PORT = 8896

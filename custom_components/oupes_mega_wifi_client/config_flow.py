@@ -44,6 +44,8 @@ from .const import (
     DEFAULT_HTTP_PORT,
     DEFAULT_TCP_PORT,
     DOMAIN,
+    CONF_RUNTIME_MAX,
+    ATTR78_RUNTIME_MAX,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,6 +64,7 @@ class OUPESWiFiClientConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._password: str = ""
         self._token: str = ""
         self._devices: list[dict] = []
+        self._runtime_max: int = ATTR78_RUNTIME_MAX
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -151,6 +154,9 @@ class OUPESWiFiClientConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_DEVICE_NAME: device_name,
                     CONF_PRODUCT_ID: dev.get("device_product_id", ""),
                 },
+                options={
+                    CONF_RUNTIME_MAX: self._runtime_max,
+                },
             )
 
         # Build option list
@@ -207,6 +213,54 @@ class OUPESWiFiClientConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 devices = info.get("bind", [])
 
         return token, devices
+
+    @staticmethod
+    @config_entries.callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> "OUPESWiFiClientOptionsFlow":
+        return OUPESWiFiClientOptionsFlow(config_entry)
+
+
+class OUPESWiFiClientOptionsFlow(config_entries.OptionsFlow):
+    """Options flow for WiFi client: allow changing device_key and runtime cap."""
+
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        self._entry = config_entry
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            # validate device_key if present
+            raw_key = user_input.get(CONF_DEVICE_KEY, "").strip()
+            if raw_key and len(raw_key) != 10:
+                errors[CONF_DEVICE_KEY] = "invalid_device_key"
+            if not errors:
+                opts = dict(user_input)
+                if raw_key:
+                    opts[CONF_DEVICE_KEY] = raw_key
+                return self.async_create_entry(title="", data=opts)
+
+        current_key = (
+            self._entry.options.get(CONF_DEVICE_KEY)
+            or self._entry.data.get(CONF_DEVICE_KEY)
+            or ""
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_DEVICE_KEY, default=current_key): str,
+                    vol.Optional(
+                        CONF_RUNTIME_MAX,
+                        default=self._entry.options.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
+                }
+            ),
+            errors=errors,
+        )
 
 
 class AuthError(Exception):

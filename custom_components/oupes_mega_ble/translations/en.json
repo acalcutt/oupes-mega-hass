@@ -50,13 +50,17 @@
       },
       "create_key": {
         "title": "Create New Device Key",
-        "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The IoT module (Wi-Fi/BLE) will turn off — **press the IoT button once to turn it back on**\n4. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.",
+        "description": "This will pair **{name}** ({address}) with a new device key over Bluetooth.\n\n**Before clicking Submit:**\n1. Press and hold the **IoT button** on the device for **5 seconds**\n2. Wait until the indicator light **flashes rapidly** (factory reset complete)\n3. The IoT module (Wi-Fi/BLE) will turn off — **press the IoT button once to turn it back on**\n4. The device is now in pairing mode\n\nA random key has been generated below. You can change it or leave the default. Pairing takes about 20 seconds.\n\n**WiFi credentials (optional):** If you want the device to connect to your WiFi network after pairing, enter your 2.4 GHz network name and password below.",
         "data": {
           "device_key": "Device Key (10 hex characters)",
+          "wifi_ssid": "WiFi Network Name (SSID)",
+          "wifi_psk": "WiFi Password",
           "go_back": "← Go back and choose a different method"
         },
         "data_description": {
           "device_key": "A random key has been pre-filled. You can keep it or enter your own 10-character hex key.",
+          "wifi_ssid": "Optional. The name of your 2.4 GHz WiFi network. Leave blank to skip WiFi provisioning.",
+          "wifi_psk": "Optional. The password for your WiFi network.",
           "go_back": "Check this and click Submit to return to the method selection screen."
         }
       },

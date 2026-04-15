@@ -19,8 +19,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry, ConfigEntryChange, SIGNAL_CONFIG_ENTRY_CHANGED
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
     CONF_DEBUG_HTTP,
@@ -186,6 +187,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Now that the domain data proxy is created, update registries (it uses hass.data[DOMAIN])
     await _async_update_registries(hass)
 
+    # Subscribe to config-entry changes so that adding/removing a device subentry
+    # immediately updates the HTTP server's user-registry without requiring a
+    # full proxy reload.  Only the primary entry registers this listener to avoid
+    # redundant updates when multiple user-account entries are present.
+    @callback
+    def _async_entry_changed(
+        change_type: ConfigEntryChange, changed_entry: ConfigEntry
+    ) -> None:
+        if change_type == ConfigEntryChange.UPDATED and changed_entry.domain == DOMAIN:
+            hass.async_create_task(_async_update_registries(hass))
+
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _async_entry_changed)
+    )
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 

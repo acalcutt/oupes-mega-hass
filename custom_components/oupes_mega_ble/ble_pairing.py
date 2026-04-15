@@ -289,3 +289,83 @@ async def _pairing_cycle(
         return PairingResult.SUCCESS
     return PairingResult.TIMEOUT
 
+
+async def async_provision_wifi(
+    hass: HomeAssistant,
+    address: str,
+    device_key: str,
+    ssid: str,
+    psk: str,
+    region: str = "wp-cn",
+) -> PairingResult:
+    """Send new WiFi credentials to an already-paired OUPES device over BLE.
+
+    Unlike async_pair_device, this does NOT factory-reset or re-key the device.
+    It connects, sends the WiFi AUTH sequence, waits for acknowledgment, and
+    disconnects.  The device will then connect to the new WiFi network.
+    """
+    ble_device = async_ble_device_from_address(hass, address, connectable=True)
+    if ble_device is None:
+        await asyncio.sleep(5)
+        ble_device = async_ble_device_from_address(hass, address, connectable=True)
+    if ble_device is None:
+        return PairingResult.DEVICE_NOT_FOUND
+
+    wifi_accepted = False
+    auth_configured = False
+
+    def on_notify(_h, data: bytearray):
+        nonlocal wifi_accepted, auth_configured
+        pkt = bytes(data)
+        if len(pkt) < 5:
+            return
+        if pkt[0] == 0x01 and pkt[1] == 0x80 and pkt[2] == 0x01:
+            if pkt[4] == 0x00:
+                wifi_accepted = True
+            elif pkt[4] == 0x01:
+                auth_configured = True
+
+    try:
+        client = await establish_connection(
+            client_class=BleakClient,
+            device=ble_device,
+            name=str(ble_device.address),
+        )
+    except Exception:
+        _LOGGER.debug("WiFi provision: connection failed to %s", address)
+        return PairingResult.CONNECTION_FAILED
+
+    try:
+        await client.start_notify(NOTIFY_CHAR_UUID, on_notify)
+        await asyncio.sleep(1.5)
+
+        auth_seq = build_init_sequence(
+            device_key, ssid=ssid, psk=psk, region=region
+        )
+        for pkt in auth_seq:
+            await client.write_gatt_char(WRITE_CHAR_UUID, pkt, response=False)
+            await asyncio.sleep(0.08)
+
+        # Wait up to 10s for acknowledgment
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            if wifi_accepted or auth_configured:
+                break
+
+        try:
+            await client.stop_notify(NOTIFY_CHAR_UUID)
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as exc:
+        _LOGGER.debug("WiFi provision error: %s", exc)
+        return PairingResult.CONNECTION_FAILED
+    finally:
+        try:
+            await client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+
+    if wifi_accepted or auth_configured:
+        return PairingResult.SUCCESS
+    return PairingResult.TIMEOUT
+

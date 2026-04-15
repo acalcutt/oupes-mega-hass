@@ -1,4 +1,4 @@
-﻿"""Config flow for OUPES Mega WiFi Proxy."""
+"""Config flow for OUPES Mega WiFi."""
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +25,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    ATTR78_RUNTIME_MAX,
     CONF_DEBUG_HTTP,
     CONF_DEBUG_RAW_LINES,
     CONF_DEBUG_TELEMETRY,
@@ -36,6 +37,7 @@ from .const import (
     CONF_MAIL,
     CONF_PASSWD,
     CONF_PORT,
+    CONF_RUNTIME_MAX,
     CONF_SIBO_PORT,
     CONF_UID,
     CONF_VALIDATION_MODE,
@@ -154,7 +156,7 @@ class OUPESMegaWiFiConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OUPESMegaWiFiOptionsFlow(config_entries.OptionsFlow):
-    """Options flow — change port or validation modes."""
+    """Options flow � change port or validation modes."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._entry = config_entry
@@ -247,11 +249,14 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
         self._pairing_error: str | None = None
         self._wifi_ssid: str = ""
         self._wifi_psk: str = ""
+        self._runtime_max: int = ATTR78_RUNTIME_MAX
+        self._reconfigure_task: asyncio.Task | None = None
+        self._reconfigure_new_data: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Entry point — check for existing oupes_mega BLE entries first."""
+        """Entry point � check for existing oupes_mega BLE entries first."""
         ble_entries = self.hass.config_entries.async_entries(_OUPES_MEGA_DOMAIN)
         device_registry = dr.async_get(self.hass)
         
@@ -298,7 +303,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         break
                 return await self.async_step_credentials()
 
-        # Always show the selection form — HA frontend requires the first step
+        # Always show the selection form � HA frontend requires the first step
         # to return a form (direct redirects cause a blank dialog).
         options: list[dict] = [
             {"value": _SOURCE_GENERATE, "label": "Generate new device key (based on User ID)"},
@@ -338,7 +343,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
         try:
             from homeassistant.components.bluetooth import async_discovered_service_info
         except ImportError:
-            # Bluetooth integration not available — skip discovery
+            # Bluetooth integration not available � skip discovery
             return await self.async_step_credentials()
         
         if user_input is not None:
@@ -412,6 +417,8 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
             mac_address = user_input.get(CONF_MAC_ADDRESS, "").strip()
             device_key = user_input.get(CONF_DEVICE_KEY, "").strip()
 
+            self._runtime_max = int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX))
+
             if self._source_method == _SOURCE_GENERATE:
                 if not mac_address:
                     errors["base"] = "missing_mac_for_pairing"
@@ -432,22 +439,39 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         CONF_DEVICE_KEY: device_key,
                         CONF_DEVICE_NAME: device_name,
                         CONF_MAC_ADDRESS: mac_address,
+                        CONF_RUNTIME_MAX: self._runtime_max,
                     },
                 )
 
         show_wifi = self._source_method == _SOURCE_GENERATE
         schema_fields = {
-            vol.Required(CONF_DEVICE_NAME, default=self._prefill_device_name): TextSelector(),
-            vol.Required(CONF_DEVICE_ID, default=self._prefill_device_id): TextSelector(),
+            vol.Required(CONF_DEVICE_NAME, default=self._prefill_device_name): TextSelector(
+                TextSelectorConfig(autocomplete="off")
+            ),
+            vol.Required(CONF_DEVICE_ID, default=self._prefill_device_id): TextSelector(
+                TextSelectorConfig(autocomplete="off")
+            ),
             vol.Required(
                 CONF_DEVICE_KEY, default=self._prefill_device_key or default_key
-            ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD)),
-            vol.Optional(CONF_MAC_ADDRESS, default=self._prefill_mac_address): TextSelector(),
+            ): TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="new-password")),
+            vol.Optional(CONF_MAC_ADDRESS, default=self._prefill_mac_address): TextSelector(
+                TextSelectorConfig(autocomplete="off")
+            ),
+            vol.Optional(
+                CONF_RUNTIME_MAX, default=self._runtime_max
+            ): NumberSelector(NumberSelectorConfig(
+                min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
+                unit_of_measurement="minutes",
+            )),
         }
         if show_wifi:
-            schema_fields[vol.Optional("wifi_ssid", default=self._wifi_ssid)] = str
-            schema_fields[vol.Optional("wifi_psk", default=self._wifi_psk)] = TextSelector(
-                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            # WiFi credentials are required for generate mode (the device needs
+            # them to connect to the broker after pairing).
+            schema_fields[vol.Required("wifi_ssid", default=self._wifi_ssid)] = TextSelector(
+                TextSelectorConfig(autocomplete="off")
+            )
+            schema_fields[vol.Required("wifi_psk", default=self._wifi_psk)] = TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="new-password")
             )
         schema = vol.Schema(schema_fields)
 
@@ -541,7 +565,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
     async def async_step_pairing_complete(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Pairing succeeded — save the entry."""
+        """Pairing succeeded � save the entry."""
         title = self._device_name_save if self._device_name_save else self._device_id_save
         return self.async_create_entry(
             title=title,
@@ -550,6 +574,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                 CONF_DEVICE_KEY: self._pairing_key,
                 CONF_DEVICE_NAME: self._device_name_save,
                 CONF_MAC_ADDRESS: self._pairing_address,
+                CONF_RUNTIME_MAX: self._runtime_max,
             },
         )
 
@@ -561,38 +586,37 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
         config_subentry = self._get_reconfigure_subentry()
         errors: dict[str, str] = {}
 
+        # Surface errors from the background WiFi provisioning step.
+        if self._pairing_error:
+            errors["base"] = self._pairing_error
+            self._pairing_error = None
+
         if user_input is not None:
             new_ssid = user_input.get("wifi_ssid", "").strip()
             new_psk = user_input.get("wifi_psk", "").strip()
             mac = user_input.get(CONF_MAC_ADDRESS, "").strip()
             device_key = user_input.get(CONF_DEVICE_KEY, "").strip()
 
-            # If WiFi credentials were entered, send them to the device over BLE
             if new_ssid:
                 if not mac:
                     errors[CONF_MAC_ADDRESS] = "missing_mac_for_pairing"
                 else:
-                    try:
-                        from custom_components.oupes_mega_ble.ble_pairing import (
-                            PairingResult,
-                            async_provision_wifi,
-                        )
-                        result = await async_provision_wifi(
-                            hass=self.hass,
-                            address=mac,
-                            device_key=device_key,
-                            ssid=new_ssid,
-                            psk=new_psk,
-                        )
-                        if result == PairingResult.DEVICE_NOT_FOUND:
-                            errors["wifi_ssid"] = "wifi_device_not_found"
-                        elif result != PairingResult.SUCCESS:
-                            errors["wifi_ssid"] = "wifi_provision_failed"
-                    except ImportError:
-                        errors["wifi_ssid"] = "wifi_ble_not_installed"
+                    # Store everything and run provisioning in a background task
+                    # (direct await times out in the HA frontend).
+                    self._reconfigure_new_data = {
+                        CONF_DEVICE_ID: user_input.get(CONF_DEVICE_ID, "").strip(),
+                        CONF_DEVICE_KEY: device_key,
+                        CONF_DEVICE_NAME: user_input.get(CONF_DEVICE_NAME, "").strip(),
+                        CONF_MAC_ADDRESS: mac,
+                        CONF_RUNTIME_MAX: int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX)),
+                    }
+                    self._wifi_ssid = new_ssid
+                    self._wifi_psk = new_psk
+                    self._pairing_address = mac
+                    return await self.async_step_reconfigure_wifi()
 
             if not errors:
-                return self.async_update_reload_and_abort(
+                return self.async_update_and_abort(
                     config_entry,
                     config_subentry,
                     data={
@@ -600,6 +624,7 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                         CONF_DEVICE_KEY: device_key,
                         CONF_DEVICE_NAME: user_input.get(CONF_DEVICE_NAME, "").strip(),
                         CONF_MAC_ADDRESS: mac,
+                        CONF_RUNTIME_MAX: int(user_input.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX)),
                     },
                     title=user_input.get(CONF_DEVICE_NAME, "").strip() or config_subentry.title,
                 )
@@ -612,25 +637,96 @@ class OUPESDeviceSubentryFlow(ConfigSubentryFlow):
                     vol.Required(
                         CONF_DEVICE_NAME,
                         default=current.get(CONF_DEVICE_NAME, ""),
-                    ): TextSelector(),
+                    ): TextSelector(TextSelectorConfig(autocomplete="off")),
                     vol.Required(
                         CONF_DEVICE_ID,
                         default=current.get(CONF_DEVICE_ID, ""),
-                    ): TextSelector(),
+                    ): TextSelector(TextSelectorConfig(autocomplete="off")),
                     vol.Required(
                         CONF_DEVICE_KEY,
                         default=current.get(CONF_DEVICE_KEY, ""),
-                    ): TextSelector(),
+                    ): TextSelector(TextSelectorConfig(autocomplete="off")),
                     vol.Optional(
                         CONF_MAC_ADDRESS,
                         default=current.get(CONF_MAC_ADDRESS, ""),
-                    ): TextSelector(),
-                    vol.Optional("wifi_ssid", default=""): str,
+                    ): TextSelector(TextSelectorConfig(autocomplete="off")),
+                    vol.Optional(
+                        CONF_RUNTIME_MAX,
+                        default=current.get(CONF_RUNTIME_MAX, ATTR78_RUNTIME_MAX),
+                    ): NumberSelector(NumberSelectorConfig(
+                        min=100, max=50000, step=60, mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="minutes",
+                    )),
+                    vol.Optional("wifi_ssid", default=""): TextSelector(
+                        TextSelectorConfig(autocomplete="off")
+                    ),
                     vol.Optional("wifi_psk", default=""): TextSelector(
-                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="new-password")
                     ),
                 }
             ),
             errors=errors,
+        )
+
+    async def async_step_reconfigure_wifi(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Run WiFi re-provisioning in the background while showing a progress spinner."""
+        if self._reconfigure_task is None:
+            try:
+                from custom_components.oupes_mega_ble.ble_pairing import async_provision_wifi
+            except ImportError:
+                self._pairing_error = "wifi_ble_not_installed"
+                return self.async_show_progress_done(next_step_id="reconfigure")
+
+            self._reconfigure_task = self.hass.async_create_task(
+                async_provision_wifi(
+                    hass=self.hass,
+                    address=self._pairing_address,
+                    device_key=self._reconfigure_new_data.get(CONF_DEVICE_KEY, ""),
+                    ssid=self._wifi_ssid,
+                    psk=self._wifi_psk,
+                )
+            )
+
+        if not self._reconfigure_task.done():
+            return self.async_show_progress(
+                step_id="reconfigure_wifi",
+                progress_action="provisioning_wifi",
+                progress_task=self._reconfigure_task,
+            )
+
+        try:
+            result = self._reconfigure_task.result()
+        except Exception:  # noqa: BLE001
+            result = None
+        finally:
+            self._reconfigure_task = None
+
+        try:
+            from custom_components.oupes_mega_ble.ble_pairing import PairingResult
+            if result == PairingResult.SUCCESS:
+                return self.async_show_progress_done(next_step_id="reconfigure_save")
+            if result == PairingResult.DEVICE_NOT_FOUND:
+                self._pairing_error = "wifi_device_not_found"
+            else:
+                self._pairing_error = "wifi_provision_failed"
+        except ImportError:
+            self._pairing_error = "wifi_ble_not_installed"
+
+        return self.async_show_progress_done(next_step_id="reconfigure")
+
+    async def async_step_reconfigure_save(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Save reconfigured device data after successful WiFi provisioning."""
+        config_entry = self._get_entry()
+        config_subentry = self._get_reconfigure_subentry()
+        data = self._reconfigure_new_data
+        return self.async_update_and_abort(
+            config_entry,
+            config_subentry,
+            data=data,
+            title=data.get(CONF_DEVICE_NAME, "") or config_subentry.title,
         )
 

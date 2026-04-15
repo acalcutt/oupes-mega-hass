@@ -73,6 +73,37 @@ Replace `192.168.1.5` with your actual HA IP address.
 
 ---
 
+## Aliases (recommended)
+
+Instead of hardcoding IP addresses in your firewall/NAT rules, create DNS/FQDN aliases so the rules continue to work if the cloud host IPs change. Below are the hostnames the integration references and the IPs observed during testing; prefer using the hostnames (alias) in your NAT rules rather than literal IPs.
+
+Known hostnames and observed IPs:
+
+- `api.upspowerstation.top` — App REST API (observed IP: `47.251.27.175`)
+- `static.upspowerstation.top` — Static assets / firmware (usually resolves alongside the API host)
+- `wp-cn.doiting.com` — SiBo backend (observed IP: `8.135.109.78`)
+- `wp-us.doiting.com` / primary broker host — Broker (observed IP: `47.252.10.9`)
+- `47.251.14.8` — Broker v2 / alternate endpoints (used for `tcp_host_v2`)
+
+pfSense alias quick steps:
+
+1. Firewall → Aliases → +Add → Type: `FQDN` (or `URL (IPs)` if you provide a hosted IP list).
+2. Add the cloud hostnames above as values (one per line).
+3. Save and Apply.
+4. Use the alias as the Destination in your NAT port-forward rules.
+
+Verification:
+
+- View the alias detail page in pfSense to see resolved IPs and last-update timestamps.
+- Use Diagnostics → Ping (alias) or check System Logs to confirm resolution.
+
+Caveats:
+
+- FQDN aliases are refreshed on the firewall's schedule and follow DNS TTLs — updates are not instantaneous.
+- For `wp-cn.doiting.com` HTTPS interception you still need Squid/SSL-inspection or the Option A behavior described below.
+
+---
+
 ## SiBo Cloud Interception (fixes "token error" login loop)
 
 The OUPES app makes a **second set of HTTPS calls** to a SiBo cloud backend (`wp-cn.doiting.com` = `8.135.109.78:443`). These calls are completely separate from the main OUPES API and use a different HTTP client with no certificate pinning. If these calls fail (e.g. because the SiBo token has expired), the app shows a **"token error"** toast and forces a re-login — creating an infinite loop.

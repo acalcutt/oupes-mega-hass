@@ -31,6 +31,9 @@ from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
 )
 
 from .ble_pairing import PairingResult, async_pair_device
@@ -146,6 +149,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pairing_key: str | None = None
         self._pairing_task: asyncio.Task | None = None
         self._pairing_error: str | None = None
+        self._wifi_ssid: str = ""
+        self._wifi_psk: str = ""
 
     # ── Automatic bluetooth discovery ─────────────────────────────────────
 
@@ -287,6 +292,8 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             if not errors:
                 self._pairing_key = new_key
+                self._wifi_ssid = user_input.get("wifi_ssid", "").strip()
+                self._wifi_psk = user_input.get("wifi_psk", "").strip()
                 return await self.async_step_pairing()
 
         suggested_key = self._pairing_key or _generate_device_key()
@@ -295,6 +302,10 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_DEVICE_KEY, default=suggested_key): str,
+                    vol.Optional("wifi_ssid", default=self._wifi_ssid): str,
+                    vol.Optional("wifi_psk", default=self._wifi_psk): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                    ),
                     vol.Optional("go_back", default=False): bool,
                 }
             ),
@@ -310,10 +321,16 @@ class OUPESMegaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Run BLE pairing in the background while showing a progress spinner."""
         if self._pairing_task is None:
+            kwargs = {
+                "hass": self.hass,
+                "address": self._address,
+                "device_key": self._pairing_key,
+            }
+            if self._wifi_ssid:
+                kwargs["ssid"] = self._wifi_ssid
+                kwargs["psk"] = self._wifi_psk
             self._pairing_task = self.hass.async_create_task(
-                async_pair_device(
-                    self.hass, self._address, self._pairing_key
-                ),
+                async_pair_device(**kwargs),
             )
 
         if not self._pairing_task.done():
