@@ -1,6 +1,6 @@
 # OUPES Mega 1 — Reverse Engineered Telemetry API
 
-> **Status:** Complete — 3 working Home Assistant integrations (`oupes_mega_ble`, `oupes_mega_wifi_proxy`, `oupes_mega_wifi_client`)  
+> **Status:** Complete — 2 working Home Assistant integrations (`oupes_mega_ble`, `oupes_mega_wifi`)  
 > **Device:** OUPES Mega 1 Power Station (WiFi+BLE model)  
 > **App:** Cleanergy (`com.cleanergy.app`)  
 > **Firmware:** 1.2.0  
@@ -10,8 +10,7 @@ This document summarizes findings from reverse engineering the OUPES Mega 1's co
 | Integration | Transport | Capabilities |
 |---|---|---|
 | **`oupes_mega_ble`** | Bluetooth LE (local) | Full read/write: sensors, binary sensors, output switches, all device settings (silent mode, breath light, fast charge, screen timeout, standby timeouts, ECO mode) |
-| **`oupes_mega_wifi_proxy`** | TCP broker (LAN) | Infrastructure — intercepts the device's cloud connection via pfSense NAT and re-serves it locally. Provides the TCP broker that `wifi_client` connects to |
-| **`oupes_mega_wifi_client`** | TCP via proxy broker | Read + output control only: sensors, binary sensors, AC/DC/USB output switches. Device settings are **not** supported over WiFi (firmware does not echo setting DPIDs back) |
+| **`oupes_mega_wifi`** | TCP broker (LAN) + TCP client | Merged integration — intercepts the device's cloud connection via pfSense NAT, re-serves it locally, and connects as a client. Read + output control: sensors, binary sensors, AC/DC/USB output switches. Device settings are **not** supported over WiFi (firmware does not echo setting DPIDs back) |
 
 ---
 
@@ -362,7 +361,7 @@ approximately every 90 seconds.
 
 ### WiFi Streaming Protocol
 
-> **Confirmed working:** This protocol was reverse-engineered by comparing PCAP captures of the real Cleanergy app ↔ cloud broker (PCAPdroid) against local proxy captures. The HA integration (`oupes_mega_wifi_proxy` + `oupes_mega_wifi_client`) implements this protocol and produces live telemetry.
+> **Confirmed working:** This protocol was reverse-engineered by comparing PCAP captures of the real Cleanergy app ↔ cloud broker (PCAPdroid) against local proxy captures. The HA integration (`oupes_mega_wifi`) implements this protocol and produces live telemetry.
 
 The device does not push telemetry just because a client subscribes — the broker must send a specific activation sequence to the device, and the client must send periodic heartbeats to sustain the stream. This mirrors the BLE protocol, where a keepalive packet (`attr 84 = 1`) must be sent every 10 seconds.
 
@@ -1198,8 +1197,8 @@ manually, then run the scan while the device is connected.
 > WiFi provisioning path calls `toSendConfigNetData` which encodes real
 > credentials.
 
-WiFi provisioning via BLE CLAIM packets is **fully working**. The HA WiFi proxy
-integration (`oupes_mega_wifi_proxy`) implements this in its device sub-entry
+WiFi provisioning via BLE CLAIM packets is **fully working**. The HA WiFi
+integration (`oupes_mega_wifi`) implements this in its device sub-entry
 flow under the "Generate new device key" option — it collects SSID/PSK and
 passes them to `async_pair_device()` during BLE pairing. The BLE integration
 (`oupes_mega_ble`) does not yet collect WiFi credentials in its config flow,
@@ -1684,7 +1683,7 @@ idle output or entering sleep mode.
 - Device settings via Cmd3: silent mode (63), breath light (58), fast charge (105), screen timeout (41), standby timeouts (45–49), AC ECO (110/111/114), DC ECO (112/113/115)
 - All telemetry sensors and binary sensors
 
-**WiFi client integration (`oupes_mega_wifi_client`) — read + output control:**
+**WiFi integration (`oupes_mega_wifi`) — read + output control:**
 - Output switches: AC, DC 12V, USB on/off (via cloud broker Cmd3 with attr 84/1)
 - All telemetry sensors and binary sensors
 - **No device settings** — the device firmware does not echo setting DPIDs (41–63, 105, 110–115) back over the WiFi/cloud broker channel, so there is no way to confirm or track setting state. Settings must be changed via BLE.
